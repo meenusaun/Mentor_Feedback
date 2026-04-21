@@ -23,8 +23,9 @@ st.caption("Analyse your mentor network using GitHub auto-load or manual upload"
 # =====================================================
 # CONFIG - UPDATE THESE 2 URLS
 # =====================================================
-MENTOR_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/Mentors_List.xlsx"
-FEEDBACK_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/Merntor_Feedback.xlsx"
+MENTOR_URL = "https://raw.githubusercontent.com/meenusaun/Mentor_Feedback/main/Mentors_List.xlsx"
+
+FEEDBACK_URL = "https://raw.githubusercontent.com/meenusaun/Mentor_Feedback/main/Merntor_Feedback.xlsx"
 
 # =====================================================
 # HELPERS
