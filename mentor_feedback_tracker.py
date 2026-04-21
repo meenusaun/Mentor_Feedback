@@ -1,5 +1,5 @@
 # app.py
-# Mentor Pool Dashboard V5 (GitHub Auto + Manual Upload)
+# Mentor Pool Dashboard V6 (GitHub Only)
 # Run: streamlit run app.py
 
 import streamlit as st
@@ -17,11 +17,11 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📊 Mentor Pool Dashboard V5")
-st.caption("Analyse your mentor network using GitHub auto-load or manual upload")
+st.title("📊 Mentor Pool Dashboard")
+st.caption("Auto-loaded from GitHub")
 
 # =====================================================
-# CONFIG - UPDATE THESE 2 URLS
+# UPDATE THESE URLs
 # =====================================================
 MENTOR_URL = "https://raw.githubusercontent.com/meenusaun/Mentor_Feedback/main/Mentors_List.xlsx"
 
@@ -59,10 +59,13 @@ def classify_rating(val):
 def get_status(row):
     if row["meetings"] >= 5 and row["good_pct"] >= 80:
         return "⭐ High Performer"
+
     elif row["meetings"] <= 2 and row["good_pct"] >= 80 and row["meetings"] > 0:
         return "💎 Hidden Gem"
+
     elif row["poor"] >= 3:
         return "🚨 Needs Review"
+
     elif row["meetings"] == 0:
         return "😴 Dormant"
 
@@ -106,40 +109,18 @@ def load_excel(file):
 # SIDEBAR
 # =====================================================
 st.sidebar.header("⚙️ Data Source")
+st.sidebar.success("✅ Files loaded from GitHub")
 
-source = st.sidebar.radio(
-    "Load files from:",
-    ["GitHub Auto", "Manual Upload"]
-)
+# =====================================================
+# LOAD FILES FROM GITHUB
+# =====================================================
+try:
+    mentor_file = load_github_file(MENTOR_URL)
+    feedback_file = load_github_file(FEEDBACK_URL)
 
-mentor_file = None
-feedback_file = None
-
-if source == "GitHub Auto":
-
-    try:
-        mentor_file = load_github_file(MENTOR_URL)
-        feedback_file = load_github_file(FEEDBACK_URL)
-        st.sidebar.success("✅ Files loaded from GitHub")
-
-    except Exception as e:
-        st.sidebar.error(f"GitHub load failed: {e}")
-        st.stop()
-
-else:
-    mentor_file = st.sidebar.file_uploader(
-        "Upload Mentors_List.xlsx",
-        type=["xlsx"]
-    )
-
-    feedback_file = st.sidebar.file_uploader(
-        "Upload Mentor_Feedback.xlsx",
-        type=["xlsx"]
-    )
-
-    if not mentor_file or not feedback_file:
-        st.info("Please upload both files.")
-        st.stop()
+except Exception as e:
+    st.error(f"GitHub load failed: {e}")
+    st.stop()
 
 # =====================================================
 # LOAD DATA
@@ -155,7 +136,7 @@ else:
     fb_df = list(feedback_data.values())[0]
 
 # =====================================================
-# VENTURE PROGRAM MAP
+# VENTURES LOOKUP
 # =====================================================
 venture_program_map = {}
 
@@ -183,7 +164,7 @@ if "Ventures" in feedback_data:
         )
 
 # =====================================================
-# COLUMN DETECTION
+# DETECT COLUMNS
 # =====================================================
 mentor_col_master = safe_find_col(
     mentor_df,
@@ -311,7 +292,7 @@ final["poor"] = final["poor"].astype(int)
 final["status"] = final.apply(get_status, axis=1)
 
 # =====================================================
-# TOP METRICS
+# METRICS
 # =====================================================
 c1, c2, c3, c4 = st.columns(4)
 
@@ -371,6 +352,7 @@ with tab1:
             y="meetings",
             title="Top Mentors by Meetings"
         )
+
         st.plotly_chart(fig1, use_container_width=True)
 
     with c2:
@@ -386,6 +368,7 @@ with tab1:
                 y="Count",
                 title="Top Skills"
             )
+
             st.plotly_chart(fig2, use_container_width=True)
 
     with c3:
@@ -401,6 +384,7 @@ with tab1:
                 values="Count",
                 title="Sector Mix"
             )
+
             st.plotly_chart(fig3, use_container_width=True)
 
 # =====================================================
