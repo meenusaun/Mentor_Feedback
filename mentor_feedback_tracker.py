@@ -1,260 +1,467 @@
+# app.py
+# Internal Mentor Pool Dashboard V1
+# Run: streamlit run app.py
+
 import streamlit as st
 import pandas as pd
 import openpyxl
 from io import BytesIO
 from collections import defaultdict
-from openai import OpenAI
-import os
+import plotly.express as px
+from datetime import datetime
 
-# -----------------------------------
+# ---------------------------------------------------
 # PAGE CONFIG
-# -----------------------------------
+# ---------------------------------------------------
 st.set_page_config(
-    page_title="Mentor Feedback Review App",
-    page_icon="📋",
+    page_title="Mentor Pool Dashboard",
+    page_icon="📊",
     layout="wide"
 )
 
-st.title("📋 Mentor Feedback Review App")
-st.caption("Upload Mentor Feedback Excel and analyse mentor quality")
+st.title("📊 Internal Mentor Pool Dashboard")
+st.caption("Upload Mentor Master + Feedback files to analyse mentor network health")
 
-# -----------------------------------
-# OPENAI CLIENT
-# -----------------------------------
-@st.cache_resource
-def get_client():
-    key = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
-    if key:
-        return OpenAI(api_key=key)
-    return None
-
-client = get_client()
-
-# -----------------------------------
+# ---------------------------------------------------
 # HELPERS
-# -----------------------------------
-def classify_rating(text):
-    text = str(text).strip()
+# ---------------------------------------------------
+def normalize_cols(df):
+    df.columns = [str(c).strip() for c in df.columns]
+    return df
 
-    if text in ["Extremely useful", "Very useful"]:
+
+def classify_rating(text):
+    text = str(text).strip().lower()
+
+    if text in ["extremely useful", "very useful"]:
         return "Good"
 
-    elif text == "Moderately useful":
+    elif text == "moderately useful":
         return "Moderate"
 
-    elif text in ["Slightly useful", "Not useful"]:
+    elif text in ["slightly useful", "not useful"]:
         return "Poor"
 
     return None
 
 
-def ask_ai(prompt):
-    if not client:
-        return "⚠️ OpenAI API key not configured."
+def safe_find_col(df, options):
+    """
+    Finds first matching column from possible names.
+    """
+    cols = [c.lower() for c in df.columns]
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0,
-        messages=[
-            {"role": "user", "content": prompt}
-        ]
-    )
+    for opt in options:
+        for actual in df.columns:
+            if opt.lower() in actual.lower():
+                return actual
 
-    return response.choices[0].message.content
-
-
-# -----------------------------------
-# EXCEL PARSER
-# -----------------------------------
-def parse_excel(uploaded_file):
-    wb = openpyxl.load_workbook(uploaded_file, read_only=True, data_only=True)
-
-    venture_meta = {}
-
-    # Ventures Sheet
-    if "Ventures" in wb.sheetnames:
-        ws = wb["Ventures"]
-
-        for i, row in enumerate(ws.iter_rows(values_only=True)):
-            if i == 0:
-                continue
-
-            if row[0]:
-                venture = str(row[0]).strip()
-
-                venture_meta[venture] = {
-                    "program": str(row[1]).strip() if row[1] else "",
-                    "hub": str(row[3]).strip() if row[3] else ""
-                }
-
-    rows = []
-
-    if "Feedback from Founders" not in wb.sheetnames:
-        return pd.DataFrame()
-
-    ws = wb["Feedback from Founders"]
-
-    for i, row in enumerate(ws.iter_rows(values_only=True)):
-        if i == 0:
-            continue
-
-        mentor = str(row[15]).strip() if row[15] else ""
-        venture = str(row[11]).strip() if row[11] else ""
-        session_rating = str(row[16]).strip() if row[16] else ""
-        founder_comment = str(row[19]).strip() if row[19] else ""
-        action_items = str(row[17]).strip() if row[17] else ""
-        meet_again = str(row[18]).strip() if row[18] else ""
-
-        rating = classify_rating(session_rating)
-
-        if not mentor or not venture or not rating:
-            continue
-
-        meta = venture_meta.get(venture, {})
-
-        rows.append({
-            "mentor": mentor,
-            "venture": venture,
-            "rating": rating,
-            "rating_raw": session_rating,
-            "feedback": founder_comment,
-            "action_items": action_items,
-            "meet_again": meet_again,
-            "hub": meta.get("hub", ""),
-            "program": meta.get("program", "")
-        })
-
-    return pd.DataFrame(rows)
+    return None
 
 
-# -----------------------------------
+# ---------------------------------------------------
 # FILE UPLOAD
-# -----------------------------------
-uploaded_file = st.sidebar.file_uploader(
-    "Upload Excel File",
-    type=["xlsx"]
+# ---------------------------------------------------
+st.sidebar.header("📁 Upload Files")
+
+mentor_file = st.sidebar.file_uploader(
+    "Upload Mentor Master File",
+    type=["xlsx"],
+    key="mentor_file"
 )
 
-if not uploaded_file:
-    st.info("Upload your mentor feedback tracker Excel file.")
+feedback_file = st.sidebar.file_uploader(
+    "Upload Mentor Feedback File",
+    type=["xlsx"],
+    key="feedback_file"
+)
+
+if not mentor_file or not feedback_file:
+    st.info("Please upload both files to continue.")
     st.stop()
 
-df = parse_excel(uploaded_file)
+# ---------------------------------------------------
+# LOAD FILES
+# ---------------------------------------------------
+@st.cache_data
+def load_excel(file):
+    xls = pd.ExcelFile(file)
+    sheets = xls.sheet_names
 
-if df.empty:
-    st.warning("No valid feedback found.")
+    data = {}
+
+    for s in sheets:
+        data[s] = normalize_cols(pd.read_excel(file, sheet_name=s))
+
+    return data
+
+
+mentor_data = load_excel(mentor_file)
+feedback_data = load_excel(feedback_file)
+
+# ---------------------------------------------------
+# FIND MAIN SHEETS
+# ---------------------------------------------------
+mentor_df = list(mentor_data.values())[0]
+
+if "Feedback from Founders" in feedback_data:
+    fb_df = feedback_data["Feedback from Founders"]
+else:
+    fb_df = list(feedback_data.values())[0]
+
+mentor_df = normalize_cols(mentor_df)
+fb_df = normalize_cols(fb_df)
+
+# ---------------------------------------------------
+# COLUMN DETECTION
+# ---------------------------------------------------
+mentor_name_col_master = safe_find_col(
+    mentor_df,
+    ["mentor name", "name", "mentor"]
+)
+
+linkedin_col = safe_find_col(
+    mentor_df,
+    ["linkedin"]
+)
+
+skills_col = safe_find_col(
+    mentor_df,
+    ["skills", "key skills", "expertise"]
+)
+
+program_col_master = safe_find_col(
+    mentor_df,
+    ["program"]
+)
+
+exp_col = safe_find_col(
+    mentor_df,
+    ["experience", "years"]
+)
+
+mentor_name_col_fb = safe_find_col(
+    fb_df,
+    ["mentor"]
+)
+
+venture_col = safe_find_col(
+    fb_df,
+    ["venture"]
+)
+
+rating_raw_col = safe_find_col(
+    fb_df,
+    ["how useful", "useful"]
+)
+
+comment_col = safe_find_col(
+    fb_df,
+    ["anything you'd like", "experience", "share"]
+)
+
+rn_col = safe_find_col(
+    fb_df,
+    ["rn remarks"]
+)
+
+connected_col = safe_find_col(
+    fb_df,
+    ["connected by us", "connected by rn", "connected"]
+)
+
+date_col = safe_find_col(
+    fb_df,
+    ["date", "timestamp"]
+)
+
+# ---------------------------------------------------
+# VALIDATION
+# ---------------------------------------------------
+if mentor_name_col_master is None:
+    st.error("Could not detect Mentor Name column in mentor file.")
     st.stop()
 
-# -----------------------------------
+if mentor_name_col_fb is None:
+    st.error("Could not detect Mentor column in feedback file.")
+    st.stop()
+
+# ---------------------------------------------------
+# PREP MASTER
+# ---------------------------------------------------
+master = pd.DataFrame()
+
+master["mentor"] = mentor_df[mentor_name_col_master].astype(str).str.strip()
+
+master["linkedin"] = (
+    mentor_df[linkedin_col] if linkedin_col else ""
+)
+
+master["skills"] = (
+    mentor_df[skills_col] if skills_col else ""
+)
+
+master["program"] = (
+    mentor_df[program_col_master] if program_col_master else ""
+)
+
+master["experience"] = (
+    mentor_df[exp_col] if exp_col else ""
+)
+
+master = master.drop_duplicates(subset=["mentor"])
+
+# ---------------------------------------------------
+# PREP FEEDBACK
+# ---------------------------------------------------
+fb = pd.DataFrame()
+
+fb["mentor"] = fb_df[mentor_name_col_fb].astype(str).str.strip()
+
+fb["venture"] = (
+    fb_df[venture_col].astype(str).str.strip()
+    if venture_col else ""
+)
+
+fb["rating_raw"] = (
+    fb_df[rating_raw_col].astype(str).str.strip()
+    if rating_raw_col else ""
+)
+
+fb["rating"] = fb["rating_raw"].apply(classify_rating)
+
+fb["comment"] = (
+    fb_df[comment_col].astype(str).str.strip()
+    if comment_col else ""
+)
+
+fb["rn_remarks"] = (
+    fb_df[rn_col].astype(str).str.strip()
+    if rn_col else ""
+)
+
+fb["connected"] = (
+    fb_df[connected_col].astype(str).str.strip()
+    if connected_col else ""
+)
+
+if date_col:
+    fb["session_date"] = pd.to_datetime(
+        fb_df[date_col],
+        errors="coerce"
+    )
+else:
+    fb["session_date"] = pd.NaT
+
+fb = fb[fb["mentor"] != ""]
+fb = fb.dropna(subset=["mentor"])
+
+# ---------------------------------------------------
+# AGGREGATE
+# ---------------------------------------------------
+summary = fb.groupby("mentor").agg(
+    meetings=("mentor", "count"),
+    good=("rating", lambda x: (x == "Good").sum()),
+    moderate=("rating", lambda x: (x == "Moderate").sum()),
+    poor=("rating", lambda x: (x == "Poor").sum()),
+    last_session=("session_date", "max")
+).reset_index()
+
+summary["good_pct"] = (
+    summary["good"] / summary["meetings"] * 100
+).round(1)
+
+summary["poor_pct"] = (
+    summary["poor"] / summary["meetings"] * 100
+).round(1)
+
+# ---------------------------------------------------
+# MERGE
+# ---------------------------------------------------
+final = master.merge(
+    summary,
+    on="mentor",
+    how="left"
+)
+
+final["meetings"] = final["meetings"].fillna(0).astype(int)
+final["good"] = final["good"].fillna(0).astype(int)
+final["moderate"] = final["moderate"].fillna(0).astype(int)
+final["poor"] = final["poor"].fillna(0).astype(int)
+final["good_pct"] = final["good_pct"].fillna(0)
+final["poor_pct"] = final["poor_pct"].fillna(0)
+
+# ---------------------------------------------------
+# FLAGS
+# ---------------------------------------------------
+def get_status(row):
+    if row["meetings"] >= 5 and row["good_pct"] >= 80:
+        return "⭐ High Performer"
+
+    elif row["meetings"] <= 2 and row["good_pct"] >= 80 and row["meetings"] > 0:
+        return "💎 Hidden Gem"
+
+    elif row["poor"] >= 3:
+        return "🚨 Needs Review"
+
+    elif row["meetings"] == 0:
+        return "😴 Dormant"
+
+    else:
+        return "🟡 Active"
+
+
+final["status"] = final.apply(get_status, axis=1)
+
+# ---------------------------------------------------
 # TOP METRICS
-# -----------------------------------
+# ---------------------------------------------------
+total_mentors = len(final)
+active_mentors = (final["meetings"] > 0).sum()
+dormant = (final["meetings"] == 0).sum()
+total_meetings = final["meetings"].sum()
+
 c1, c2, c3, c4 = st.columns(4)
 
-c1.metric("Mentors", df["mentor"].nunique())
-c2.metric("Good", (df["rating"] == "Good").sum())
-c3.metric("Moderate", (df["rating"] == "Moderate").sum())
-c4.metric("Poor", (df["rating"] == "Poor").sum())
+c1.metric("Total Mentors", total_mentors)
+c2.metric("Active Mentors", active_mentors)
+c3.metric("Dormant", dormant)
+c4.metric("Meetings", total_meetings)
 
 st.divider()
 
-# -----------------------------------
+# ---------------------------------------------------
 # FILTERS
-# -----------------------------------
-all_hubs = sorted(df["hub"].dropna().unique())
-all_programs = sorted(df["program"].dropna().unique())
+# ---------------------------------------------------
+col1, col2 = st.columns(2)
 
-col1, col2, col3 = st.columns(3)
+search = col1.text_input("Search Mentor")
 
-search = col1.text_input("Search Mentor / Venture")
-
-rating_filter = col2.multiselect(
-    "Rating",
-    ["Good", "Moderate", "Poor"]
+status_filter = col2.multiselect(
+    "Status",
+    final["status"].unique().tolist()
 )
 
-hub_filter = col3.multiselect(
-    "Hub",
-    all_hubs
-)
-
-filtered = df.copy()
+view = final.copy()
 
 if search:
-    q = search.lower()
-
-    filtered = filtered[
-        filtered["mentor"].str.lower().str.contains(q) |
-        filtered["venture"].str.lower().str.contains(q)
+    view = view[
+        view["mentor"].str.lower().str.contains(search.lower())
     ]
 
-if rating_filter:
-    filtered = filtered[filtered["rating"].isin(rating_filter)]
+if status_filter:
+    view = view[
+        view["status"].isin(status_filter)
+    ]
 
-if hub_filter:
-    filtered = filtered[filtered["hub"].isin(hub_filter)]
+# ---------------------------------------------------
+# TABLE
+# ---------------------------------------------------
+st.subheader("👤 Mentor Pool Scorecards")
 
-# -----------------------------------
-# MENTOR VIEW
-# -----------------------------------
-mentors = sorted(filtered["mentor"].unique())
+st.dataframe(
+    view[
+        [
+            "mentor",
+            "skills",
+            "program",
+            "experience",
+            "meetings",
+            "good",
+            "moderate",
+            "poor",
+            "good_pct",
+            "poor_pct",
+            "status"
+        ]
+    ],
+    use_container_width=True,
+    hide_index=True
+)
 
-for mentor in mentors:
+# ---------------------------------------------------
+# CHARTS
+# ---------------------------------------------------
+st.subheader("📈 Insights")
 
-    mdf = filtered[filtered["mentor"] == mentor]
+col1, col2 = st.columns(2)
 
-    g = (mdf["rating"] == "Good").sum()
-    m = (mdf["rating"] == "Moderate").sum()
-    p = (mdf["rating"] == "Poor").sum()
+with col1:
+    top10 = final.sort_values(
+        "meetings",
+        ascending=False
+    ).head(10)
 
-    with st.expander(
-        f"{mentor} | 🟢 {g} 🟡 {m} 🔴 {p}"
-    ):
+    fig = px.bar(
+        top10,
+        x="mentor",
+        y="meetings",
+        title="Top Mentors by Meetings"
+    )
 
-        for _, row in mdf.iterrows():
+    st.plotly_chart(fig, use_container_width=True)
 
-            st.markdown(f"""
-**{row['venture']}**  
-Rating: {row['rating']}  
-Feedback: {row['feedback']}  
-Action Items: {row['action_items']}  
-Meet Again: {row['meet_again']}  
-Hub: {row['hub']} | Program: {row['program']}
+with col2:
+    rating_counts = {
+        "Good": fb["rating"].eq("Good").sum(),
+        "Moderate": fb["rating"].eq("Moderate").sum(),
+        "Poor": fb["rating"].eq("Poor").sum()
+    }
+
+    pie_df = pd.DataFrame({
+        "Rating": list(rating_counts.keys()),
+        "Count": list(rating_counts.values())
+    })
+
+    fig2 = px.pie(
+        pie_df,
+        names="Rating",
+        values="Count",
+        title="Overall Feedback Split"
+    )
+
+    st.plotly_chart(fig2, use_container_width=True)
+
+# ---------------------------------------------------
+# MENTOR DETAIL
+# ---------------------------------------------------
+st.subheader("🔍 Mentor Detail View")
+
+mentor_pick = st.selectbox(
+    "Select Mentor",
+    sorted(final["mentor"].tolist())
+)
+
+md = final[final["mentor"] == mentor_pick].iloc[0]
+mfb = fb[fb["mentor"] == mentor_pick]
+
+st.markdown(f"### {mentor_pick}")
+st.write(f"**Skills:** {md['skills']}")
+st.write(f"**Program:** {md['program']}")
+st.write(f"**Experience:** {md['experience']}")
+st.write(f"**LinkedIn:** {md['linkedin']}")
+st.write(f"**Status:** {md['status']}")
+st.write(f"**Meetings:** {md['meetings']}")
+
+st.markdown("### Feedback Entries")
+
+for _, r in mfb.iterrows():
+    st.markdown(f"""
+**Venture:** {r['venture']}  
+**Rating:** {r['rating']}  
+**Founder Comment:** {r['comment']}  
+**RN Remarks:** {r['rn_remarks']}  
 ---
 """)
 
-        if st.button(f"AI Review {mentor}", key=mentor):
-
-            entries = "\n".join([
-                f"{r['venture']} [{r['rating']}]: {r['feedback']}"
-                for _, r in mdf.iterrows()
-            ])
-
-            prompt = f"""
-You are reviewing mentor quality.
-
-Mentor Name: {mentor}
-
-Entries:
-{entries}
-
-Give:
-
-1. Neutral summary
-2. Strengths
-3. Concerns
-4. Should this mentor be promoted / monitored / reviewed
-"""
-
-            st.info(ask_ai(prompt))
-
-# -----------------------------------
-# DOWNLOAD SUMMARY
-# -----------------------------------
-summary = df.groupby(["mentor", "rating"]).size().unstack(fill_value=0).reset_index()
+# ---------------------------------------------------
+# DOWNLOAD
+# ---------------------------------------------------
+csv = final.to_csv(index=False).encode()
 
 st.download_button(
-    "⬇ Download Summary CSV",
-    summary.to_csv(index=False).encode(),
-    "mentor_summary.csv",
+    "⬇ Download Mentor Pool Report",
+    csv,
+    "mentor_pool_report.csv",
     "text/csv"
 )
