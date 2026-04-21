@@ -1,5 +1,5 @@
 # app.py
-# Mentor Pool Dashboard V2
+# Mentor Pool Dashboard V4
 # Run: streamlit run app.py
 
 import streamlit as st
@@ -15,7 +15,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📊 Mentor Pool Dashboard V2")
+st.title("📊 Mentor Pool Dashboard V4")
 st.caption("Upload Mentor Master + Feedback files to analyse your mentor network")
 
 # =====================================================
@@ -39,17 +39,15 @@ def classify_rating(val):
 
     if val in ["extremely useful", "very useful"]:
         return "Good"
-
     elif val == "moderately useful":
         return "Average"
-
     elif val in ["slightly useful", "not useful"]:
         return "Poor"
 
     return None
 
 
-def status_logic(row):
+def get_status(row):
     if row["meetings"] >= 5 and row["good_pct"] >= 80:
         return "⭐ High Performer"
 
@@ -63,6 +61,21 @@ def status_logic(row):
         return "😴 Dormant"
 
     return "🟡 Active"
+
+
+def split_multi_values(series):
+    """
+    Split comma-separated values for charts
+    """
+    vals = []
+
+    for item in series.fillna("").astype(str):
+        for part in item.split(","):
+            part = part.strip()
+            if part and part != "0":
+                vals.append(part)
+
+    return pd.Series(vals)
 
 
 # =====================================================
@@ -81,21 +94,21 @@ feedback_file = st.sidebar.file_uploader(
 )
 
 if not mentor_file or not feedback_file:
-    st.info("Please upload both files to continue.")
+    st.info("Please upload both files.")
     st.stop()
 
 # =====================================================
-# LOAD FILES
+# LOAD EXCEL
 # =====================================================
 @st.cache_data
 def load_excel(file):
     xls = pd.ExcelFile(file)
-    data = {}
+    sheets = {}
 
     for s in xls.sheet_names:
-        data[s] = normalize_cols(pd.read_excel(file, sheet_name=s))
+        sheets[s] = normalize_cols(pd.read_excel(file, sheet_name=s))
 
-    return data
+    return sheets
 
 
 mentor_data = load_excel(mentor_file)
@@ -108,11 +121,35 @@ if "Feedback from Founders" in feedback_data:
 else:
     fb_df = list(feedback_data.values())[0]
 
-mentor_df = normalize_cols(mentor_df)
-fb_df = normalize_cols(fb_df)
+# =====================================================
+# VENTURES SHEET LOOKUP
+# =====================================================
+venture_program_map = {}
+
+if "Ventures" in feedback_data:
+
+    ventures_df = feedback_data["Ventures"]
+
+    venture_name_col = safe_find_col(
+        ventures_df,
+        ["venture", "startup"]
+    )
+
+    venture_program_col = safe_find_col(
+        ventures_df,
+        ["program"]
+    )
+
+    if venture_name_col and venture_program_col:
+        venture_program_map = dict(
+            zip(
+                ventures_df[venture_name_col].astype(str).str.strip(),
+                ventures_df[venture_program_col].astype(str).str.strip()
+            )
+        )
 
 # =====================================================
-# DETECT COLUMNS
+# DETECT MASTER COLUMNS
 # =====================================================
 mentor_col_master = safe_find_col(
     mentor_df,
@@ -129,6 +166,11 @@ skills_col = safe_find_col(
     ["skills", "expertise"]
 )
 
+sector_col = safe_find_col(
+    mentor_df,
+    ["sector", "industry", "domain"]
+)
+
 program_col_master = safe_find_col(
     mentor_df,
     ["program"]
@@ -139,6 +181,9 @@ exp_col = safe_find_col(
     ["experience", "years"]
 )
 
+# =====================================================
+# DETECT FEEDBACK COLUMNS
+# =====================================================
 mentor_col_fb = safe_find_col(
     fb_df,
     ["mentor"]
@@ -169,27 +214,22 @@ connected_col = safe_find_col(
     ["connected"]
 )
 
-venture_program_col = safe_find_col(
-    fb_df,
-    ["program"]
-)
-
 # =====================================================
-# MASTER TABLE
+# MASTER DATA
 # =====================================================
 master = pd.DataFrame()
 
 master["mentor"] = mentor_df[mentor_col_master].astype(str).str.strip()
-
 master["linkedin"] = mentor_df[linkedin_col] if linkedin_col else ""
 master["skills"] = mentor_df[skills_col] if skills_col else ""
+master["sector"] = mentor_df[sector_col] if sector_col else ""
 master["program"] = mentor_df[program_col_master] if program_col_master else ""
 master["experience"] = mentor_df[exp_col] if exp_col else ""
 
 master = master.drop_duplicates(subset=["mentor"])
 
 # =====================================================
-# FEEDBACK TABLE
+# FEEDBACK DATA
 # =====================================================
 fb = pd.DataFrame()
 
@@ -202,7 +242,12 @@ fb["rating"] = fb["rating_raw"].apply(classify_rating)
 fb["comment"] = fb_df[comment_col] if comment_col else ""
 fb["rn_remarks"] = fb_df[rn_col] if rn_col else ""
 fb["connected"] = fb_df[connected_col] if connected_col else ""
-fb["venture_program"] = fb_df[venture_program_col] if venture_program_col else ""
+
+fb["venture_program"] = (
+    fb["venture"]
+    .map(venture_program_map)
+    .fillna("")
+)
 
 fb = fb[fb["mentor"] != ""]
 
@@ -216,19 +261,25 @@ summary = fb.groupby("mentor").agg(
     poor=("rating", lambda x: (x == "Poor").sum())
 ).reset_index()
 
-summary["good_pct"] = (summary["good"] / summary["meetings"] * 100).round(1)
+summary["good_pct"] = (
+    summary["good"] / summary["meetings"] * 100
+).round(1)
 
 # =====================================================
 # MERGE
 # =====================================================
-final = master.merge(summary, on="mentor", how="left").fillna(0)
+final = master.merge(
+    summary,
+    on="mentor",
+    how="left"
+).fillna(0)
 
 final["meetings"] = final["meetings"].astype(int)
 final["good"] = final["good"].astype(int)
 final["average"] = final["average"].astype(int)
 final["poor"] = final["poor"].astype(int)
 
-final["status"] = final.apply(status_logic, axis=1)
+final["status"] = final.apply(get_status, axis=1)
 
 # =====================================================
 # TOP METRICS
@@ -251,7 +302,7 @@ tab1, tab2 = st.tabs([
 ])
 
 # =====================================================
-# TAB 1
+# TAB 1 - MENTOR POOL
 # =====================================================
 with tab1:
 
@@ -289,6 +340,7 @@ with tab1:
             [
                 "mentor",
                 "skills",
+                "sector",
                 "program",
                 "experience",
                 "meetings",
@@ -303,56 +355,83 @@ with tab1:
         hide_index=True
     )
 
-    st.subheader("Top Mentors by Meetings")
+    st.markdown("### 📈 Pool Insights")
 
-    top10 = final.sort_values(
-        "meetings",
-        ascending=False
-    ).head(10)
+    col1, col2, col3 = st.columns(3)
 
-    fig = px.bar(
-        top10,
-        x="mentor",
-        y="meetings"
-    )
+    # Meetings Chart
+    with col1:
+        top10 = final.sort_values(
+            "meetings",
+            ascending=False
+        ).head(10)
 
-    st.plotly_chart(fig, use_container_width=True)
+        fig1 = px.bar(
+            top10,
+            x="mentor",
+            y="meetings",
+            title="Top Mentors by Meetings"
+        )
+
+        st.plotly_chart(fig1, use_container_width=True)
+
+    # Skills Chart
+    with col2:
+        skill_series = split_multi_values(final["skills"])
+
+        if not skill_series.empty:
+            skills_df = skill_series.value_counts().head(10).reset_index()
+            skills_df.columns = ["Skill", "Count"]
+
+            fig2 = px.bar(
+                skills_df,
+                x="Skill",
+                y="Count",
+                title="Top Skills"
+            )
+
+            st.plotly_chart(fig2, use_container_width=True)
+
+    # Sector Chart
+    with col3:
+        sector_series = split_multi_values(final["sector"])
+
+        if not sector_series.empty:
+            sector_df = sector_series.value_counts().head(10).reset_index()
+            sector_df.columns = ["Sector", "Count"]
+
+            fig3 = px.pie(
+                sector_df,
+                names="Sector",
+                values="Count",
+                title="Sector Distribution"
+            )
+
+            st.plotly_chart(fig3, use_container_width=True)
 
 # =====================================================
-# TAB 2
+# TAB 2 - FEEDBACK ANALYSIS
 # =====================================================
 with tab2:
 
     st.subheader("Feedback Intelligence")
 
-    col1, col2, col3 = st.columns(3)
+    df2 = fb.copy()
+
+    col1, col2 = st.columns(2)
 
     rating_filter = col1.multiselect(
         "Feedback Category",
         ["Good", "Average", "Poor"]
     )
 
-    mentor_prog_filter = col2.multiselect(
-        "Program of Mentor",
-        sorted(final["program"].astype(str).unique())
-    )
-
-    venture_prog_filter = col3.multiselect(
+    venture_prog_filter = col2.multiselect(
         "Program of Venture",
-        sorted(fb["venture_program"].astype(str).unique())
-    )
-
-    df2 = fb.merge(
-        final[["mentor", "program"]],
-        on="mentor",
-        how="left"
+        sorted(df2["venture_program"].astype(str).unique())
     )
 
     if rating_filter:
         df2 = df2[df2["rating"].isin(rating_filter)]
-
-    if mentor_prog_filter:
-        df2 = df2[df2["program"].isin(mentor_prog_filter)]
 
     if venture_prog_filter:
         df2 = df2[df2["venture_program"].isin(venture_prog_filter)]
@@ -388,7 +467,7 @@ with tab2:
 padding:12px;
 border:1px solid #ddd;
 border-radius:8px;
-margin-bottom:8px;
+margin-bottom:10px;
 background:#fafafa;
 font-size:14px;
 line-height:1.5;
@@ -398,7 +477,6 @@ line-height:1.5;
 <b>Feedback:</b> {r['rating']}<br>
 <b>Connected By Us:</b> {r['connected']}<br>
 <b>Program of Venture:</b> {r['venture_program']}<br>
-<b>Program of Mentor:</b> {r['program']}<br>
 <b>Founder Comment:</b> {r['comment']}<br>
 <b>RN Remarks:</b> {r['rn_remarks']}
 
