@@ -1,10 +1,12 @@
 # app.py
-# Mentor Pool Dashboard V4
+# Mentor Pool Dashboard V5 (GitHub Auto + Manual Upload)
 # Run: streamlit run app.py
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import requests
+from io import BytesIO
 
 # =====================================================
 # PAGE CONFIG
@@ -15,8 +17,14 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📊 Mentor Pool Dashboard V4")
-st.caption("Upload Mentor Master + Feedback files to analyse your mentor network")
+st.title("📊 Mentor Pool Dashboard V5")
+st.caption("Analyse your mentor network using GitHub auto-load or manual upload")
+
+# =====================================================
+# CONFIG - UPDATE THESE 2 URLS
+# =====================================================
+MENTOR_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/Mentors_List.xlsx"
+FEEDBACK_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/Merntor_Feedback.xlsx"
 
 # =====================================================
 # HELPERS
@@ -50,13 +58,10 @@ def classify_rating(val):
 def get_status(row):
     if row["meetings"] >= 5 and row["good_pct"] >= 80:
         return "⭐ High Performer"
-
     elif row["meetings"] <= 2 and row["good_pct"] >= 80 and row["meetings"] > 0:
         return "💎 Hidden Gem"
-
     elif row["poor"] >= 3:
         return "🚨 Needs Review"
-
     elif row["meetings"] == 0:
         return "😴 Dormant"
 
@@ -64,53 +69,80 @@ def get_status(row):
 
 
 def split_multi_values(series):
-    """
-    Split comma-separated values for charts
-    """
     vals = []
 
     for item in series.fillna("").astype(str):
         for part in item.split(","):
             part = part.strip()
+
             if part and part != "0":
                 vals.append(part)
 
     return pd.Series(vals)
 
 
-# =====================================================
-# FILE UPLOAD
-# =====================================================
-st.sidebar.header("📁 Upload Files")
+@st.cache_data
+def load_github_file(url):
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    return BytesIO(r.content)
 
-mentor_file = st.sidebar.file_uploader(
-    "Upload Mentors_List.xlsx",
-    type=["xlsx"]
-)
 
-feedback_file = st.sidebar.file_uploader(
-    "Upload Mentor_Feedback.xlsx",
-    type=["xlsx"]
-)
-
-if not mentor_file or not feedback_file:
-    st.info("Please upload both files.")
-    st.stop()
-
-# =====================================================
-# LOAD EXCEL
-# =====================================================
 @st.cache_data
 def load_excel(file):
     xls = pd.ExcelFile(file)
     sheets = {}
 
     for s in xls.sheet_names:
-        sheets[s] = normalize_cols(pd.read_excel(file, sheet_name=s))
+        sheets[s] = normalize_cols(
+            pd.read_excel(file, sheet_name=s)
+        )
 
     return sheets
 
 
+# =====================================================
+# SIDEBAR
+# =====================================================
+st.sidebar.header("⚙️ Data Source")
+
+source = st.sidebar.radio(
+    "Load files from:",
+    ["GitHub Auto", "Manual Upload"]
+)
+
+mentor_file = None
+feedback_file = None
+
+if source == "GitHub Auto":
+
+    try:
+        mentor_file = load_github_file(MENTOR_URL)
+        feedback_file = load_github_file(FEEDBACK_URL)
+        st.sidebar.success("✅ Files loaded from GitHub")
+
+    except Exception as e:
+        st.sidebar.error(f"GitHub load failed: {e}")
+        st.stop()
+
+else:
+    mentor_file = st.sidebar.file_uploader(
+        "Upload Mentors_List.xlsx",
+        type=["xlsx"]
+    )
+
+    feedback_file = st.sidebar.file_uploader(
+        "Upload Mentor_Feedback.xlsx",
+        type=["xlsx"]
+    )
+
+    if not mentor_file or not feedback_file:
+        st.info("Please upload both files.")
+        st.stop()
+
+# =====================================================
+# LOAD DATA
+# =====================================================
 mentor_data = load_excel(mentor_file)
 feedback_data = load_excel(feedback_file)
 
@@ -122,7 +154,7 @@ else:
     fb_df = list(feedback_data.values())[0]
 
 # =====================================================
-# VENTURES SHEET LOOKUP
+# VENTURE PROGRAM MAP
 # =====================================================
 venture_program_map = {}
 
@@ -141,6 +173,7 @@ if "Ventures" in feedback_data:
     )
 
     if venture_name_col and venture_program_col:
+
         venture_program_map = dict(
             zip(
                 ventures_df[venture_name_col].astype(str).str.strip(),
@@ -149,7 +182,7 @@ if "Ventures" in feedback_data:
         )
 
 # =====================================================
-# DETECT MASTER COLUMNS
+# COLUMN DETECTION
 # =====================================================
 mentor_col_master = safe_find_col(
     mentor_df,
@@ -181,9 +214,6 @@ exp_col = safe_find_col(
     ["experience", "years"]
 )
 
-# =====================================================
-# DETECT FEEDBACK COLUMNS
-# =====================================================
 mentor_col_fb = safe_find_col(
     fb_df,
     ["mentor"]
@@ -243,11 +273,9 @@ fb["comment"] = fb_df[comment_col] if comment_col else ""
 fb["rn_remarks"] = fb_df[rn_col] if rn_col else ""
 fb["connected"] = fb_df[connected_col] if connected_col else ""
 
-fb["venture_program"] = (
-    fb["venture"]
-    .map(venture_program_map)
-    .fillna("")
-)
+fb["venture_program"] = fb["venture"].map(
+    venture_program_map
+).fillna("")
 
 fb = fb[fb["mentor"] != ""]
 
@@ -302,41 +330,14 @@ tab1, tab2 = st.tabs([
 ])
 
 # =====================================================
-# TAB 1 - MENTOR POOL
+# TAB 1
 # =====================================================
 with tab1:
 
     st.subheader("Mentor Pool Intelligence")
 
-    col1, col2, col3 = st.columns(3)
-
-    search = col1.text_input("Search Mentor")
-
-    status_filter = col2.multiselect(
-        "Status",
-        final["status"].unique().tolist()
-    )
-
-    prog_filter = col3.multiselect(
-        "Program",
-        sorted(final["program"].astype(str).unique())
-    )
-
-    view = final.copy()
-
-    if search:
-        view = view[
-            view["mentor"].str.lower().str.contains(search.lower())
-        ]
-
-    if status_filter:
-        view = view[view["status"].isin(status_filter)]
-
-    if prog_filter:
-        view = view[view["program"].isin(prog_filter)]
-
     st.dataframe(
-        view[
+        final[
             [
                 "mentor",
                 "skills",
@@ -355,12 +356,9 @@ with tab1:
         hide_index=True
     )
 
-    st.markdown("### 📈 Pool Insights")
+    c1, c2, c3 = st.columns(3)
 
-    col1, col2, col3 = st.columns(3)
-
-    # Meetings Chart
-    with col1:
+    with c1:
         top10 = final.sort_values(
             "meetings",
             ascending=False
@@ -372,71 +370,46 @@ with tab1:
             y="meetings",
             title="Top Mentors by Meetings"
         )
-
         st.plotly_chart(fig1, use_container_width=True)
 
-    # Skills Chart
-    with col2:
+    with c2:
         skill_series = split_multi_values(final["skills"])
 
         if not skill_series.empty:
-            skills_df = skill_series.value_counts().head(10).reset_index()
-            skills_df.columns = ["Skill", "Count"]
+            sdf = skill_series.value_counts().head(10).reset_index()
+            sdf.columns = ["Skill", "Count"]
 
             fig2 = px.bar(
-                skills_df,
+                sdf,
                 x="Skill",
                 y="Count",
                 title="Top Skills"
             )
-
             st.plotly_chart(fig2, use_container_width=True)
 
-    # Sector Chart
-    with col3:
+    with c3:
         sector_series = split_multi_values(final["sector"])
 
         if not sector_series.empty:
-            sector_df = sector_series.value_counts().head(10).reset_index()
-            sector_df.columns = ["Sector", "Count"]
+            sec = sector_series.value_counts().head(10).reset_index()
+            sec.columns = ["Sector", "Count"]
 
             fig3 = px.pie(
-                sector_df,
+                sec,
                 names="Sector",
                 values="Count",
-                title="Sector Distribution"
+                title="Sector Mix"
             )
-
             st.plotly_chart(fig3, use_container_width=True)
 
 # =====================================================
-# TAB 2 - FEEDBACK ANALYSIS
+# TAB 2
 # =====================================================
 with tab2:
 
     st.subheader("Feedback Intelligence")
 
-    df2 = fb.copy()
-
-    col1, col2 = st.columns(2)
-
-    rating_filter = col1.multiselect(
-        "Feedback Category",
-        ["Good", "Average", "Poor"]
-    )
-
-    venture_prog_filter = col2.multiselect(
-        "Program of Venture",
-        sorted(df2["venture_program"].astype(str).unique())
-    )
-
-    if rating_filter:
-        df2 = df2[df2["rating"].isin(rating_filter)]
-
-    if venture_prog_filter:
-        df2 = df2[df2["venture_program"].isin(venture_prog_filter)]
-
-    summary2 = df2.groupby("mentor").agg(
+    summary2 = fb.groupby("mentor").agg(
         Good=("rating", lambda x: (x == "Good").sum()),
         Average=("rating", lambda x: (x == "Average").sum()),
         Poor=("rating", lambda x: (x == "Poor").sum()),
@@ -450,46 +423,13 @@ with tab2:
         hide_index=True
     )
 
-    st.markdown("### Mentor Feedback Detail")
-
-    mentors = sorted(df2["mentor"].unique())
-
-    for mentor in mentors:
-
-        mm = df2[df2["mentor"] == mentor]
-
-        with st.expander(mentor):
-
-            for _, r in mm.iterrows():
-
-                st.markdown(f"""
-<div style="
-padding:12px;
-border:1px solid #ddd;
-border-radius:8px;
-margin-bottom:10px;
-background:#fafafa;
-font-size:14px;
-line-height:1.5;
-">
-
-<b>Venture:</b> {r['venture']}<br>
-<b>Feedback:</b> {r['rating']}<br>
-<b>Connected By Us:</b> {r['connected']}<br>
-<b>Program of Venture:</b> {r['venture_program']}<br>
-<b>Founder Comment:</b> {r['comment']}<br>
-<b>RN Remarks:</b> {r['rn_remarks']}
-
-</div>
-""", unsafe_allow_html=True)
-
 # =====================================================
 # DOWNLOAD
 # =====================================================
 csv = final.to_csv(index=False).encode()
 
 st.download_button(
-    "⬇ Download Mentor Pool Report",
+    "⬇ Download Report",
     csv,
     "mentor_pool_report.csv",
     "text/csv"
