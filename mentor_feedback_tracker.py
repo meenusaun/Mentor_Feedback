@@ -114,14 +114,16 @@ mc_skills = safe_find_col(mentor_df, ["primary expertise"])
 mc_sector = safe_find_col(mentor_df, ["primary sector"])
 mc_prog   = safe_find_col(mentor_df, ["program suitability"])
 mc_exp    = safe_find_col(mentor_df, ["years of experience"])
+mc_expcat = safe_find_col(mentor_df, ["experience category"])
 
 master = pd.DataFrame({
-    "mentor":     clean_str(mentor_df[mc_name]),
-    "linkedin":   clean_str(mentor_df[mc_li])     if mc_li     else "",
-    "skills":     clean_str(mentor_df[mc_skills]) if mc_skills else "",
-    "sector":     clean_str(mentor_df[mc_sector]) if mc_sector else "",
-    "program":    clean_str(mentor_df[mc_prog])   if mc_prog   else "",
-    "experience": clean_str(mentor_df[mc_exp])    if mc_exp    else "",
+    "mentor":      clean_str(mentor_df[mc_name]),
+    "linkedin":    clean_str(mentor_df[mc_li])     if mc_li     else "",
+    "skills":      clean_str(mentor_df[mc_skills]) if mc_skills else "",
+    "sector":      clean_str(mentor_df[mc_sector]) if mc_sector else "",
+    "program":     clean_str(mentor_df[mc_prog])   if mc_prog   else "",
+    "experience":  clean_str(mentor_df[mc_exp])    if mc_exp    else "",
+    "exp_category":clean_str(mentor_df[mc_expcat]) if mc_expcat else "",
 }).drop_duplicates(subset=["mentor"])
 
 # ─────────────────────────────────────────────────────────
@@ -202,7 +204,7 @@ with tab1:
     st.subheader("Mentor Pool Intelligence")
 
     with st.expander("🔍 Filters", expanded=True):
-        f1, f2, f3, f4 = st.columns(4)
+        f1, f2, f3, f4, f5 = st.columns(5)
         name_search  = f1.text_input("Search Mentor Name", key="mp_name")
         sel_ratings  = f2.multiselect("Feedback Category", ["Good", "Average", "Poor"], key="mp_rating")
         sel_statuses = f3.multiselect("Mentor Status", sorted(final["status"].unique()), key="mp_status")
@@ -211,6 +213,8 @@ with tab1:
             for p in val.split(",") if p.strip() not in ("", "nan")
         })
         sel_programs = f4.multiselect("Mentor Program", prog_opts, key="mp_program")
+        exp_cat_opts = sorted({v for v in final["exp_category"].unique() if v and v != ""})
+        sel_exp_cats = f5.multiselect("Experience Band", exp_cat_opts, key="mp_expcat")
 
     disp = final.copy()
     if name_search:
@@ -222,6 +226,8 @@ with tab1:
     if sel_ratings:
         matched = fb[fb["rating"].isin(sel_ratings)]["mentor"].unique()
         disp = disp[disp["mentor"].isin(matched)]
+    if sel_exp_cats:
+        disp = disp[disp["exp_category"].isin(sel_exp_cats)]
 
     # Stats
     st.markdown("---")
@@ -230,7 +236,7 @@ with tab1:
 
     st.caption(f"Showing {len(disp)} of {len(final)} mentors")
     st.dataframe(
-        disp[["mentor", "skills", "sector", "program", "experience",
+        disp[["mentor", "skills", "sector", "program", "experience", "exp_category",
               "meetings", "good", "average", "poor", "good_pct", "status"]],
         use_container_width=True, hide_index=True
     )
@@ -404,18 +410,24 @@ with tab3:
     st.subheader("Venture-wise Feedback")
 
     with st.expander("🔍 Filters", expanded=True):
-        vf1, vf2 = st.columns(2)
+        vf1, vf2, vf3 = st.columns(3)
         vp3_vals = sorted({v for v in venture_program_map.values() if v and v not in ("nan", "")})
         sel_vp3  = vf1.selectbox("Venture Program", ["All"] + vp3_vals, key="vf_vprog")
 
         hub3_vals = sorted({h.strip() for h in venture_hub_map.values() if h and h not in ("nan", "")})
         sel_hub3  = vf2.selectbox("Hub", ["All"] + hub3_vals, key="vf_hub")
 
+        exp3_opts = sorted({v for v in final["exp_category"].unique() if v and v != ""})
+        sel_exp3  = vf3.multiselect("Mentor Experience Band", exp3_opts, key="vf_expcat")
+
     fb_v = fb.copy()
     if sel_vp3 != "All":
         fb_v = fb_v[fb_v["venture_program"] == sel_vp3]
     if sel_hub3 != "All":
         fb_v = fb_v[fb_v["venture_hub"].str.contains(sel_hub3, na=False)]
+    if sel_exp3:
+        mentors_in_exp = final[final["exp_category"].isin(sel_exp3)]["mentor"].tolist()
+        fb_v = fb_v[fb_v["mentor"].isin(mentors_in_exp)]
 
     # Stats
     st.markdown("---")
