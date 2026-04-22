@@ -329,12 +329,11 @@ with tab2:
     st.subheader("Feedback Intelligence")
 
     with st.expander("🔍 Filters", expanded=True):
-        fa1, fa2, fa3 = st.columns(3)
+        fa1, fa2, fa3, fa4 = st.columns(4)
 
         mentor_fb_opts = ["All"] + sorted(fb["mentor"].dropna().unique().tolist())
         sel_mentor_fb  = fa1.selectbox("Select Mentor", mentor_fb_opts, key="fa_mentor")
 
-        # Venture programs pulled from VenturesList (reliable, non-empty)
         vp_vals = sorted({v for v in venture_program_map.values() if v and v not in ("nan", "")})
         sel_v_prog = fa2.selectbox("Venture Program", ["All"] + vp_vals, key="fa_vprog")
 
@@ -344,6 +343,8 @@ with tab2:
         })
         sel_m_prog = fa3.selectbox("Mentor Program (Suitability)", ["All"] + mp_vals, key="fa_mprog")
 
+        sel_fb_cat2 = fa4.multiselect("Feedback Category", ["Good", "Average", "Poor"], key="fa_fbcat")
+
     fb_view = fb.copy()
     if sel_mentor_fb != "All":
         fb_view = fb_view[fb_view["mentor"] == sel_mentor_fb]
@@ -352,6 +353,8 @@ with tab2:
     if sel_m_prog != "All":
         m_in_prog = final[final["program"].apply(lambda v: sel_m_prog in str(v))]["mentor"].tolist()
         fb_view   = fb_view[fb_view["mentor"].isin(m_in_prog)]
+    if sel_fb_cat2:
+        fb_view = fb_view[fb_view["rating"].isin(sel_fb_cat2)]
 
     # Stats
     st.markdown("---")
@@ -425,7 +428,7 @@ with tab3:
     st.subheader("Venture-wise Feedback")
 
     with st.expander("🔍 Filters", expanded=True):
-        vf1, vf2, vf3 = st.columns(3)
+        vf1, vf2, vf3, vf4 = st.columns(4)
         vp3_vals = sorted({v for v in venture_program_map.values() if v and v not in ("nan", "")})
         sel_vp3  = vf1.selectbox("Venture Program", ["All"] + vp3_vals, key="vf_vprog")
 
@@ -435,11 +438,15 @@ with tab3:
         exp_label_opts = ["😊 Positive", "😐 Mixed", "😟 Needs Attention"]
         sel_exp_labels = vf3.multiselect("Overall Experience", exp_label_opts, key="vf_explabel")
 
+        sel_fb_cat3 = vf4.multiselect("Feedback Category", ["Good", "Average", "Poor"], key="vf_fbcat")
+
     fb_v = fb.copy()
     if sel_vp3 != "All":
         fb_v = fb_v[fb_v["venture_program"] == sel_vp3]
     if sel_hub3 != "All":
         fb_v = fb_v[fb_v["venture_hub"].str.contains(sel_hub3, na=False)]
+    if sel_fb_cat3:
+        fb_v = fb_v[fb_v["rating"].isin(sel_fb_cat3)]
     if sel_exp_labels:
         # Compute per-venture experience label and filter ventures matching selection
         tmp = fb_v.groupby("venture").agg(
