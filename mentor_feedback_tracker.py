@@ -204,17 +204,29 @@ with tab1:
     st.subheader("Mentor Pool Intelligence")
 
     with st.expander("🔍 Filters", expanded=True):
-        f1, f2, f3, f4, f5 = st.columns(5)
+        f1, f2, f3 = st.columns(3)
         name_search  = f1.text_input("Search Mentor Name", key="mp_name")
         sel_ratings  = f2.multiselect("Feedback Category", ["Good", "Average", "Poor"], key="mp_rating")
         sel_statuses = f3.multiselect("Mentor Status", sorted(final["status"].unique()), key="mp_status")
+
+        f4, f5, f6 = st.columns(3)
         prog_opts    = sorted({
             p.strip() for val in final["program"].astype(str)
             for p in val.split(",") if p.strip() not in ("", "nan")
         })
-        sel_programs = f4.multiselect("Mentor Program", prog_opts, key="mp_program")
-        exp_cat_opts = sorted({v for v in final["exp_category"].unique() if v and v != ""})
-        sel_exp_cats = f5.multiselect("Experience Band", exp_cat_opts, key="mp_expcat")
+        sel_programs  = f4.multiselect("Mentor Program", prog_opts, key="mp_program")
+        exp_cat_opts  = sorted({v for v in final["exp_category"].unique() if v and v != ""})
+        sel_exp_cats  = f5.multiselect("Experience Band", exp_cat_opts, key="mp_expcat")
+        sel_ov_exp    = f6.multiselect("Overall Experience", ["😊 Positive", "😐 Mixed", "😟 Needs Attention"], key="mp_ovexp")
+
+    # Pre-compute per-mentor overall experience label
+    mentor_exp_map = {}
+    for mentor_name, grp in fb.groupby("mentor"):
+        good_pct = (grp["rating"] == "Good").sum() / len(grp) * 100
+        poor_cnt = (grp["rating"] == "Poor").sum()
+        if good_pct >= 70:   mentor_exp_map[mentor_name] = "😊 Positive"
+        elif poor_cnt >= 2:  mentor_exp_map[mentor_name] = "😟 Needs Attention"
+        else:                mentor_exp_map[mentor_name] = "😐 Mixed"
 
     disp = final.copy()
     if name_search:
@@ -228,6 +240,9 @@ with tab1:
         disp = disp[disp["mentor"].isin(matched)]
     if sel_exp_cats:
         disp = disp[disp["exp_category"].isin(sel_exp_cats)]
+    if sel_ov_exp:
+        matched_exp = [m for m, label in mentor_exp_map.items() if label in sel_ov_exp]
+        disp = disp[disp["mentor"].isin(matched_exp)]
 
     # Stats
     st.markdown("---")
@@ -417,17 +432,29 @@ with tab3:
         hub3_vals = sorted({h.strip() for h in venture_hub_map.values() if h and h not in ("nan", "")})
         sel_hub3  = vf2.selectbox("Hub", ["All"] + hub3_vals, key="vf_hub")
 
-        exp3_opts = sorted({v for v in final["exp_category"].unique() if v and v != ""})
-        sel_exp3  = vf3.multiselect("Mentor Experience Band", exp3_opts, key="vf_expcat")
+        exp_label_opts = ["😊 Positive", "😐 Mixed", "😟 Needs Attention"]
+        sel_exp_labels = vf3.multiselect("Overall Experience", exp_label_opts, key="vf_explabel")
 
     fb_v = fb.copy()
     if sel_vp3 != "All":
         fb_v = fb_v[fb_v["venture_program"] == sel_vp3]
     if sel_hub3 != "All":
         fb_v = fb_v[fb_v["venture_hub"].str.contains(sel_hub3, na=False)]
-    if sel_exp3:
-        mentors_in_exp = final[final["exp_category"].isin(sel_exp3)]["mentor"].tolist()
-        fb_v = fb_v[fb_v["mentor"].isin(mentors_in_exp)]
+    if sel_exp_labels:
+        # Compute per-venture experience label and filter ventures matching selection
+        tmp = fb_v.groupby("venture").agg(
+            Good  =("rating", lambda x: (x == "Good").sum()),
+            Poor  =("rating", lambda x: (x == "Poor").sum()),
+            Total =("mentor", "count"),
+        ).reset_index()
+        tmp["Good_%"] = (tmp["Good"] / tmp["Total"] * 100).round(1)
+        def _exp(row):
+            if row["Good_%"] >= 70: return "😊 Positive"
+            if row["Poor"] >= 2:    return "😟 Needs Attention"
+            return "😐 Mixed"
+        tmp["exp_label"] = tmp.apply(_exp, axis=1)
+        matching_ventures = tmp[tmp["exp_label"].isin(sel_exp_labels)]["venture"].tolist()
+        fb_v = fb_v[fb_v["venture"].isin(matching_ventures)]
 
     # Stats
     st.markdown("---")
