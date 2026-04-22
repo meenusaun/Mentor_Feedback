@@ -1,5 +1,4 @@
-# app.py
-# Mentor Pool Dashboard V7
+# app.py  –  Mentor Pool Dashboard V8
 # Run: streamlit run app.py
 
 import streamlit as st
@@ -8,31 +7,26 @@ import plotly.express as px
 import requests
 from io import BytesIO
 
-# =====================================================
+# ─────────────────────────────────────────────────────────
 # PAGE CONFIG
-# =====================================================
-st.set_page_config(
-    page_title="Mentor Pool Dashboard",
-    page_icon="📊",
-    layout="wide"
-)
-
+# ─────────────────────────────────────────────────────────
+st.set_page_config(page_title="Mentor Pool Dashboard", page_icon="📊", layout="wide")
 st.title("📊 Mentor Pool Dashboard")
 st.caption("Auto-loaded from GitHub")
 
-# =====================================================
-# UPDATE THESE URLs
-# =====================================================
-MENTOR_URL = "https://raw.githubusercontent.com/meenusaun/Mentor_Feedback/main/Mentors_List.xlsx"
+# ─────────────────────────────────────────────────────────
+# GITHUB URLs  ← update as needed
+# ─────────────────────────────────────────────────────────
+MENTOR_URL   = "https://raw.githubusercontent.com/meenusaun/Mentor_Feedback/main/Mentors_List.xlsx"
 FEEDBACK_URL = "https://raw.githubusercontent.com/meenusaun/Mentor_Feedback/main/Merntor_Feedback.xlsx"
+VENTURES_URL = "https://raw.githubusercontent.com/meenusaun/Mentor_Feedback/main/VenturesList.xlsx"
 
-# =====================================================
+# ─────────────────────────────────────────────────────────
 # HELPERS
-# =====================================================
+# ─────────────────────────────────────────────────────────
 def normalize_cols(df):
     df.columns = [str(c).strip() for c in df.columns]
     return df
-
 
 def safe_find_col(df, keywords):
     for col in df.columns:
@@ -41,219 +35,165 @@ def safe_find_col(df, keywords):
                 return col
     return None
 
-
 def classify_rating(val):
-    val = str(val).strip().lower()
-    if val in ["extremely useful", "very useful"]:
-        return "Good"
-    elif val == "moderately useful":
-        return "Average"
-    elif val in ["slightly useful", "not useful"]:
-        return "Poor"
+    v = str(val).strip().lower()
+    if v in ["extremely useful", "very useful"]:  return "Good"
+    if v == "moderately useful":                  return "Average"
+    if v in ["slightly useful", "not useful"]:    return "Poor"
     return None
 
-
 def get_status(row):
-    if row["meetings"] >= 5 and row["good_pct"] >= 80:
-        return "⭐ High Performer"
-    elif row["meetings"] <= 2 and row["good_pct"] >= 80 and row["meetings"] > 0:
-        return "💎 Hidden Gem"
-    elif row["poor"] >= 3:
-        return "🚨 Needs Review"
-    elif row["meetings"] == 0:
-        return "😴 Dormant"
+    if row["meetings"] >= 5 and row["good_pct"] >= 80:                          return "⭐ High Performer"
+    if row["meetings"] <= 2 and row["good_pct"] >= 80 and row["meetings"] > 0:  return "💎 Hidden Gem"
+    if row["poor"] >= 3:                                                          return "🚨 Needs Review"
+    if row["meetings"] == 0:                                                      return "😴 Dormant"
     return "🟡 Active"
 
-
-def split_multi_values(series):
+def split_multi(series):
     vals = []
     for item in series.fillna("").astype(str):
-        for part in item.split(","):
-            part = part.strip()
-            if part and part != "0":
-                vals.append(part)
+        for p in item.split(","):
+            p = p.strip()
+            if p and p != "0" and p.lower() != "nan":
+                vals.append(p)
     return pd.Series(vals)
 
-
-def multiselect_filter(df, col, label, key):
-    options = sorted(df[col].dropna().unique().tolist())
-    chosen = st.multiselect(label, options, key=key)
-    if chosen:
-        return df[df[col].isin(chosen)]
-    return df
-
+def clean_str(series):
+    return series.astype(str).str.strip().replace({"nan": "", "NaT": ""})
 
 @st.cache_data
-def load_github_file(url):
+def fetch_url(url):
     r = requests.get(url, timeout=30)
     r.raise_for_status()
     return BytesIO(r.content)
 
-
 @st.cache_data
-def load_excel(file):
-    xls = pd.ExcelFile(file)
-    sheets = {}
-    for s in xls.sheet_names:
-        sheets[s] = normalize_cols(pd.read_excel(file, sheet_name=s))
-    return sheets
+def load_excel(file_bytes):
+    xls = pd.ExcelFile(file_bytes)
+    return {s: normalize_cols(pd.read_excel(file_bytes, sheet_name=s)) for s in xls.sheet_names}
 
-
-# =====================================================
-# SIDEBAR
-# =====================================================
+# ─────────────────────────────────────────────────────────
+# LOAD FILES
+# ─────────────────────────────────────────────────────────
 st.sidebar.header("⚙️ Data Source")
-st.sidebar.success("✅ Files loaded from GitHub")
-
-# =====================================================
-# LOAD FILES FROM GITHUB
-# =====================================================
 try:
-    mentor_file = load_github_file(MENTOR_URL)
-    feedback_file = load_github_file(FEEDBACK_URL)
+    mentor_sheets   = load_excel(fetch_url(MENTOR_URL))
+    feedback_sheets = load_excel(fetch_url(FEEDBACK_URL))
+    ventures_sheets = load_excel(fetch_url(VENTURES_URL))
+    st.sidebar.success("✅ All files loaded from GitHub")
 except Exception as e:
     st.error(f"GitHub load failed: {e}")
     st.stop()
 
-# =====================================================
-# LOAD DATA
-# =====================================================
-mentor_data = load_excel(mentor_file)
-feedback_data = load_excel(feedback_file)
+mentor_df   = list(mentor_sheets.values())[0]
+fb_df       = feedback_sheets.get("Feedback from Founders", list(feedback_sheets.values())[0])
+ventures_df = ventures_sheets.get("Ventures", list(ventures_sheets.values())[0])
 
-mentor_df = list(mentor_data.values())[0]
+# ─────────────────────────────────────────────────────────
+# VENTURES LOOKUP  (VenturesList.xlsx is source of truth)
+# ─────────────────────────────────────────────────────────
+v_name_col = safe_find_col(ventures_df, ["venture name"])
+v_prog_col = safe_find_col(ventures_df, ["program"])
+v_hub_col  = safe_find_col(ventures_df, ["hub"])
 
-# Use 'Feedback from Founders' sheet (has Program & Hub columns)
-if "Feedback from Founders" in feedback_data:
-    fb_df = feedback_data["Feedback from Founders"]
-else:
-    fb_df = list(feedback_data.values())[0]
+venture_program_map: dict = {}
+venture_hub_map: dict     = {}
+if v_name_col:
+    vnames = ventures_df[v_name_col].astype(str).str.strip()
+    if v_prog_col:
+        venture_program_map = dict(zip(vnames, ventures_df[v_prog_col].astype(str).str.strip()))
+    if v_hub_col:
+        venture_hub_map = dict(zip(vnames, ventures_df[v_hub_col].astype(str).str.strip()))
 
-# =====================================================
-# VENTURES LOOKUP  (Program comes from Ventures sheet)
-# =====================================================
-venture_program_map = {}
-venture_hub_map = {}
+# ─────────────────────────────────────────────────────────
+# MENTOR MASTER
+# ─────────────────────────────────────────────────────────
+mc_name   = safe_find_col(mentor_df, ["name"])
+mc_li     = safe_find_col(mentor_df, ["linkedin"])
+mc_skills = safe_find_col(mentor_df, ["primary expertise"])
+mc_sector = safe_find_col(mentor_df, ["primary sector"])
+mc_prog   = safe_find_col(mentor_df, ["program suitability"])
+mc_exp    = safe_find_col(mentor_df, ["years of experience"])
 
-if "Ventures" in feedback_data:
-    ventures_df = feedback_data["Ventures"]
-    v_name_col = safe_find_col(ventures_df, ["venture name", "venture"])
-    v_prog_col = safe_find_col(ventures_df, ["program"])
-    v_hub_col  = safe_find_col(ventures_df, ["hub"])
-    if v_name_col and v_prog_col:
-        venture_program_map = dict(
-            zip(ventures_df[v_name_col].astype(str).str.strip(),
-                ventures_df[v_prog_col].astype(str).str.strip())
-        )
-    if v_name_col and v_hub_col:
-        venture_hub_map = dict(
-            zip(ventures_df[v_name_col].astype(str).str.strip(),
-                ventures_df[v_hub_col].astype(str).str.strip())
-        )
+master = pd.DataFrame({
+    "mentor":     clean_str(mentor_df[mc_name]),
+    "linkedin":   clean_str(mentor_df[mc_li])     if mc_li     else "",
+    "skills":     clean_str(mentor_df[mc_skills]) if mc_skills else "",
+    "sector":     clean_str(mentor_df[mc_sector]) if mc_sector else "",
+    "program":    clean_str(mentor_df[mc_prog])   if mc_prog   else "",
+    "experience": clean_str(mentor_df[mc_exp])    if mc_exp    else "",
+}).drop_duplicates(subset=["mentor"])
 
-# =====================================================
-# DETECT COLUMNS – MENTOR MASTER
-# =====================================================
-mentor_col_master  = safe_find_col(mentor_df, ["name"])
-linkedin_col       = safe_find_col(mentor_df, ["linkedin"])
-skills_col         = safe_find_col(mentor_df, ["primary expertise"])
-sector_col         = safe_find_col(mentor_df, ["primary sector"])
-program_col_master = safe_find_col(mentor_df, ["program suitability"])
-exp_col            = safe_find_col(mentor_df, ["years of experience"])
+# ─────────────────────────────────────────────────────────
+# FEEDBACK DF  (Program & Hub always from VenturesList)
+# ─────────────────────────────────────────────────────────
+fc_mentor    = safe_find_col(fb_df, ["who was your mentor", "mentor"])
+fc_venture   = safe_find_col(fb_df, ["venture name", "venture"])
+fc_rating    = safe_find_col(fb_df, ["how useful"])
+fc_comment   = safe_find_col(fb_df, ["anything you'd like", "experience"])
+fc_rn        = safe_find_col(fb_df, ["rn remarks"])
+fc_connected = safe_find_col(fb_df, ["connected"])
 
-# =====================================================
-# DETECT COLUMNS – FEEDBACK
-# =====================================================
-mentor_col_fb  = safe_find_col(fb_df, ["who was your mentor", "mentor"])
-venture_col_fb = safe_find_col(fb_df, ["venture name", "venture"])
-rating_raw_col = safe_find_col(fb_df, ["how useful"])
-comment_col    = safe_find_col(fb_df, ["anything you'd like", "experience"])
-rn_col         = safe_find_col(fb_df, ["rn remarks"])
-connected_col  = safe_find_col(fb_df, ["connected"])
-prog_col_fb    = safe_find_col(fb_df, ["program"])
-hub_col_fb     = safe_find_col(fb_df, ["hub"])
-
-# =====================================================
-# BUILD MASTER DF
-# =====================================================
-master = pd.DataFrame()
-master["mentor"]     = mentor_df[mentor_col_master].astype(str).str.strip()
-master["linkedin"]   = mentor_df[linkedin_col] if linkedin_col else ""
-master["skills"]     = mentor_df[skills_col] if skills_col else ""
-master["sector"]     = mentor_df[sector_col] if sector_col else ""
-master["program"]    = mentor_df[program_col_master] if program_col_master else ""
-master["experience"] = mentor_df[exp_col] if exp_col else ""
-master = master.drop_duplicates(subset=["mentor"])
-
-# =====================================================
-# BUILD FEEDBACK DF
-# =====================================================
-fb = pd.DataFrame()
-fb["mentor"]    = fb_df[mentor_col_fb].astype(str).str.strip() if mentor_col_fb else ""
-fb["venture"]   = fb_df[venture_col_fb].astype(str).str.strip() if venture_col_fb else ""
-fb["rating_raw"]= fb_df[rating_raw_col] if rating_raw_col else ""
-fb["rating"]    = fb["rating_raw"].apply(classify_rating)
-fb["comment"]   = fb_df[comment_col] if comment_col else ""
-fb["rn_remarks"]= fb_df[rn_col] if rn_col else ""
-fb["connected"] = fb_df[connected_col] if connected_col else ""
-
-# Venture program: prefer inline column from feedback sheet, fallback to Ventures sheet lookup
-if prog_col_fb:
-    fb["venture_program"] = fb_df[prog_col_fb].astype(str).str.strip().replace("nan", "")
-    fb["venture_program"] = fb["venture_program"].where(
-        fb["venture_program"] != "", fb["venture"].map(venture_program_map).fillna("")
-    )
-else:
-    fb["venture_program"] = fb["venture"].map(venture_program_map).fillna("")
-
-if hub_col_fb:
-    fb["venture_hub"] = fb_df[hub_col_fb].astype(str).str.strip().replace("nan", "")
-else:
-    fb["venture_hub"] = fb["venture"].map(venture_hub_map).fillna("")
-
+fb = pd.DataFrame({
+    "mentor":     clean_str(fb_df[fc_mentor])    if fc_mentor    else "",
+    "venture":    clean_str(fb_df[fc_venture])   if fc_venture   else "",
+    "rating_raw": fb_df[fc_rating]               if fc_rating    else "",
+    "comment":    clean_str(fb_df[fc_comment])   if fc_comment   else "",
+    "rn_remarks": clean_str(fb_df[fc_rn])        if fc_rn        else "",
+    "connected":  clean_str(fb_df[fc_connected]) if fc_connected else "",
+})
+fb["rating"]          = fb["rating_raw"].apply(classify_rating)
+fb["venture_program"] = fb["venture"].map(venture_program_map).fillna("").replace("nan", "")
+fb["venture_hub"]     = fb["venture"].map(venture_hub_map).fillna("").replace("nan", "")
 fb = fb[fb["mentor"].str.strip() != ""]
 
-# =====================================================
-# SUMMARY (mentor-level)
-# =====================================================
+# ─────────────────────────────────────────────────────────
+# MENTOR SUMMARY → FINAL
+# ─────────────────────────────────────────────────────────
 summary = fb.groupby("mentor").agg(
     meetings=("mentor", "count"),
-    good=("rating", lambda x: (x == "Good").sum()),
-    average=("rating", lambda x: (x == "Average").sum()),
-    poor=("rating", lambda x: (x == "Poor").sum())
+    good    =("rating", lambda x: (x == "Good").sum()),
+    average =("rating", lambda x: (x == "Average").sum()),
+    poor    =("rating", lambda x: (x == "Poor").sum()),
 ).reset_index()
-
 summary["good_pct"] = (summary["good"] / summary["meetings"] * 100).round(1)
 
-# =====================================================
-# MERGE → FINAL
-# =====================================================
 final = master.merge(summary, on="mentor", how="left").fillna(0)
-final["meetings"] = final["meetings"].astype(int)
-final["good"]     = final["good"].astype(int)
-final["average"]  = final["average"].astype(int)
-final["poor"]     = final["poor"].astype(int)
-final["status"]   = final.apply(get_status, axis=1)
+for col in ["meetings", "good", "average", "poor"]:
+    final[col] = final[col].astype(int)
+final["status"] = final.apply(get_status, axis=1)
 
-# =====================================================
-# TOP METRICS
-# =====================================================
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total Mentors",  len(final))
-c2.metric("Active Mentors", (final["meetings"] > 0).sum())
-c3.metric("Dormant",        (final["meetings"] == 0).sum())
-c4.metric("Total Meetings", final["meetings"].sum())
+# ─────────────────────────────────────────────────────────
+# STAT ROW HELPERS  (all filter-aware)
+# ─────────────────────────────────────────────────────────
+def mentor_stats(df_f):
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Mentors",  len(df_f))
+    c2.metric("Active Mentors", int((df_f["meetings"] > 0).sum()))
+    c3.metric("Dormant",        int((df_f["meetings"] == 0).sum()))
+    c4.metric("Total Meetings", int(df_f["meetings"].sum()))
 
-st.divider()
+def feedback_stats(fb_f):
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total Sessions",     len(fb_f))
+    c2.metric("Feedbacks Received", int(fb_f["rating"].notna().sum()))
+    c3.metric("✅ Good",            int((fb_f["rating"] == "Good").sum()))
+    c4.metric("🟡 Average",         int((fb_f["rating"] == "Average").sum()))
+    c5.metric("🔴 Poor",            int((fb_f["rating"] == "Poor").sum()))
 
-# =====================================================
+def venture_stats(fb_f):
+    all_v  = fb_f["venture"].nunique()
+    conn_v = fb_f[fb_f["connected"].str.lower().str.contains("yes", na=False)]["venture"].nunique()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Ventures",              all_v)
+    c2.metric("Ventures w/ Mentor Connect",  conn_v)
+    c3.metric("Total Sessions",              len(fb_f))
+
+# ══════════════════════════════════════════════════════════
 # TABS
-# =====================================================
-tab1, tab2, tab3 = st.tabs([
-    "👤 Mentor Pool",
-    "📋 Feedback Analysis",
-    "🏢 Venture-wise Feedback"
-])
+# ══════════════════════════════════════════════════════════
+tab1, tab2, tab3 = st.tabs(["👤 Mentor Pool", "📋 Feedback Analysis", "🏢 Venture-wise Feedback"])
+
 
 # ╔══════════════════════════════════════════════════╗
 # ║  TAB 1 – MENTOR POOL                            ║
@@ -261,89 +201,104 @@ tab1, tab2, tab3 = st.tabs([
 with tab1:
     st.subheader("Mentor Pool Intelligence")
 
-    # ── Filters ──────────────────────────────────────
     with st.expander("🔍 Filters", expanded=True):
         f1, f2, f3, f4 = st.columns(4)
+        name_search  = f1.text_input("Search Mentor Name", key="mp_name")
+        sel_ratings  = f2.multiselect("Feedback Category", ["Good", "Average", "Poor"], key="mp_rating")
+        sel_statuses = f3.multiselect("Mentor Status", sorted(final["status"].unique()), key="mp_status")
+        prog_opts    = sorted({
+            p.strip() for val in final["program"].astype(str)
+            for p in val.split(",") if p.strip() not in ("", "nan")
+        })
+        sel_programs = f4.multiselect("Mentor Program", prog_opts, key="mp_program")
 
-        with f1:
-            name_search = st.text_input("Search Mentor Name", key="mp_name")
-
-        with f2:
-            # Rating category filter derived from fb data
-            all_rating_cats = ["Good", "Average", "Poor"]
-            sel_ratings = st.multiselect(
-                "Feedback Category",
-                all_rating_cats,
-                key="mp_rating"
-            )
-
-        with f3:
-            all_statuses = sorted(final["status"].unique().tolist())
-            sel_statuses = st.multiselect("Mentor Status", all_statuses, key="mp_status")
-
-        with f4:
-            # Mentor's own program suitability from master list
-            prog_options = sorted(set(
-                p.strip()
-                for val in final["program"].dropna().astype(str)
-                for p in val.split(",")
-                if p.strip() and p.strip() != "nan"
-            ))
-            sel_programs = st.multiselect("Mentor Program", prog_options, key="mp_program")
-
-    # ── Apply filters ─────────────────────────────────
     disp = final.copy()
-
     if name_search:
         disp = disp[disp["mentor"].str.contains(name_search, case=False, na=False)]
-
     if sel_statuses:
         disp = disp[disp["status"].isin(sel_statuses)]
-
     if sel_programs:
-        disp = disp[disp["program"].apply(
-            lambda v: any(p in str(v) for p in sel_programs)
-        )]
-
+        disp = disp[disp["program"].apply(lambda v: any(p in str(v) for p in sel_programs))]
     if sel_ratings:
-        # Keep mentors who have at least 1 session of the selected category
-        def has_rating(mentor_name):
-            rows = fb[fb["mentor"] == mentor_name]
-            return any(rows["rating"].isin(sel_ratings))
-        disp = disp[disp["mentor"].apply(has_rating)]
+        matched = fb[fb["rating"].isin(sel_ratings)]["mentor"].unique()
+        disp = disp[disp["mentor"].isin(matched)]
+
+    # Stats
+    st.markdown("---")
+    mentor_stats(disp)
+    st.markdown("---")
 
     st.caption(f"Showing {len(disp)} of {len(final)} mentors")
-
     st.dataframe(
         disp[["mentor", "skills", "sector", "program", "experience",
               "meetings", "good", "average", "poor", "good_pct", "status"]],
-        use_container_width=True,
-        hide_index=True
+        use_container_width=True, hide_index=True
     )
 
-    # ── Charts ────────────────────────────────────────
-    c1, c2, c3 = st.columns(3)
-
-    with c1:
+    ch1, ch2, ch3 = st.columns(3)
+    with ch1:
         top10 = disp.sort_values("meetings", ascending=False).head(10)
-        fig1 = px.bar(top10, x="mentor", y="meetings", title="Top Mentors by Meetings")
-        st.plotly_chart(fig1, use_container_width=True)
-
-    with c2:
-        skill_series = split_multi_values(disp["skills"])
-        if not skill_series.empty:
-            sdf = skill_series.value_counts().head(10).reset_index()
+        st.plotly_chart(px.bar(top10, x="mentor", y="meetings", title="Top 10 by Meetings"),
+                        use_container_width=True)
+    with ch2:
+        ss = split_multi(disp["skills"])
+        if not ss.empty:
+            sdf = ss.value_counts().head(10).reset_index()
             sdf.columns = ["Skill", "Count"]
-            fig2 = px.bar(sdf, x="Skill", y="Count", title="Top Skills")
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(px.bar(sdf, x="Skill", y="Count", title="Top Skills"),
+                            use_container_width=True)
+    with ch3:
+        sec = split_multi(disp["sector"])
+        if not sec.empty:
+            sedf = sec.value_counts().head(10).reset_index()
+            sedf.columns = ["Sector", "Count"]
+            st.plotly_chart(px.pie(sedf, names="Sector", values="Count", title="Sector Mix"),
+                            use_container_width=True)
 
-    with c3:
-        sector_series = split_multi_values(disp["sector"])
-        if not sector_series.empty:
-            sec = sector_series.value_counts().head(10).reset_index()
-            sec.columns = ["Sector", "Count"]
-            fig3 = px.pie(sec, names="Sector", values="Count", title="Sector Mix")
-            st.plotly_chart(fig3, use_container_width=True)
+    # ── Mentor Deep-dive ──────────────────────────────
+    st.divider()
+    st.markdown("#### 🔎 Mentor Deep-dive")
+    dd_opts       = ["— Select a Mentor —"] + sorted(disp["mentor"].dropna().unique().tolist())
+    sel_mentor_dd = st.selectbox("Select Mentor", dd_opts, key="mp_dd")
+
+    if sel_mentor_dd != "— Select a Mentor —":
+        mrow = disp[disp["mentor"] == sel_mentor_dd].iloc[0]
+        mfb  = fb[fb["mentor"] == sel_mentor_dd].copy()
+
+        pc1, pc2, pc3, pc4, pc5 = st.columns(5)
+        pc1.metric("Sessions",   int(mrow["meetings"]))
+        pc2.metric("✅ Good",    int(mrow["good"]))
+        pc3.metric("🟡 Average", int(mrow["average"]))
+        pc4.metric("🔴 Poor",    int(mrow["poor"]))
+        pc5.metric("Good %",     f"{mrow['good_pct']}%")
+
+        st.caption(
+            f"**Status:** {mrow['status']}  |  **Skills:** {mrow['skills']}  |  "
+            f"**Sector:** {mrow['sector']}  |  **Experience:** {mrow['experience']} yrs  |  "
+            f"**Program:** {mrow['program']}"
+        )
+
+        if mfb.empty:
+            st.info("No feedback sessions recorded for this mentor yet.")
+        else:
+            mfb["vp"] = mfb["venture_program"].replace("", "—")
+            mfb["vh"] = mfb["venture_hub"].replace("", "—")
+            detail = mfb[["venture", "vp", "vh", "rating", "comment", "rn_remarks", "connected"]].rename(columns={
+                "venture": "Venture", "vp": "Venture Program", "vh": "Hub",
+                "rating": "Rating", "comment": "Founder Comment",
+                "rn_remarks": "RN Remarks", "connected": "Connected by Us",
+            })
+            st.markdown("##### Ventures Connected & Feedback")
+            st.dataframe(detail, use_container_width=True, hide_index=True)
+
+            rc = mfb["rating"].dropna().value_counts().reset_index()
+            rc.columns = ["Rating", "Count"]
+            st.plotly_chart(
+                px.pie(rc, names="Rating", values="Count",
+                       title=f"Rating Mix – {sel_mentor_dd}", color="Rating",
+                       color_discrete_map={"Good": "#2ecc71", "Average": "#f39c12", "Poor": "#e74c3c"}),
+                use_container_width=True
+            )
 
 
 # ╔══════════════════════════════════════════════════╗
@@ -352,114 +307,94 @@ with tab1:
 with tab2:
     st.subheader("Feedback Intelligence")
 
-    # ── Filters ──────────────────────────────────────
     with st.expander("🔍 Filters", expanded=True):
         fa1, fa2, fa3 = st.columns(3)
 
-        with fa1:
-            mentor_options = ["All"] + sorted(fb["mentor"].dropna().unique().tolist())
-            sel_mentor_fb = st.selectbox("Select Mentor", mentor_options, key="fa_mentor")
+        mentor_fb_opts = ["All"] + sorted(fb["mentor"].dropna().unique().tolist())
+        sel_mentor_fb  = fa1.selectbox("Select Mentor", mentor_fb_opts, key="fa_mentor")
 
-        with fa2:
-            v_prog_options = ["All"] + sorted(
-                p for p in fb["venture_program"].dropna().unique() if p and p != "nan"
-            )
-            sel_v_prog = st.selectbox("Venture Program", v_prog_options, key="fa_vprog")
+        # Venture programs pulled from VenturesList (reliable, non-empty)
+        vp_vals = sorted({v for v in venture_program_map.values() if v and v not in ("nan", "")})
+        sel_v_prog = fa2.selectbox("Venture Program", ["All"] + vp_vals, key="fa_vprog")
 
-        with fa3:
-            # Mentor's program from master list
-            mentor_prog_options = ["All"] + sorted(set(
-                p.strip()
-                for val in final["program"].dropna().astype(str)
-                for p in val.split(",")
-                if p.strip() and p.strip() != "nan"
-            ))
-            sel_m_prog = st.selectbox("Mentor Program", mentor_prog_options, key="fa_mprog")
+        mp_vals = sorted({
+            p.strip() for val in final["program"].astype(str)
+            for p in val.split(",") if p.strip() not in ("", "nan")
+        })
+        sel_m_prog = fa3.selectbox("Mentor Program (Suitability)", ["All"] + mp_vals, key="fa_mprog")
 
-    # ── Filter feedback ───────────────────────────────
     fb_view = fb.copy()
-
     if sel_mentor_fb != "All":
         fb_view = fb_view[fb_view["mentor"] == sel_mentor_fb]
-
     if sel_v_prog != "All":
         fb_view = fb_view[fb_view["venture_program"] == sel_v_prog]
-
     if sel_m_prog != "All":
-        # Get mentors whose program field contains selected program
-        matching_mentors = final[final["program"].apply(
-            lambda v: sel_m_prog in str(v)
-        )]["mentor"].tolist()
-        fb_view = fb_view[fb_view["mentor"].isin(matching_mentors)]
+        m_in_prog = final[final["program"].apply(lambda v: sel_m_prog in str(v))]["mentor"].tolist()
+        fb_view   = fb_view[fb_view["mentor"].isin(m_in_prog)]
 
-    # ── Summary table ─────────────────────────────────
-    summary2 = fb_view.groupby("mentor").agg(
-        Good=("rating", lambda x: (x == "Good").sum()),
-        Average=("rating", lambda x: (x == "Average").sum()),
-        Poor=("rating", lambda x: (x == "Poor").sum()),
-        Connected_By_Us=("connected", lambda x: x.astype(str).str.contains("yes", case=False).sum()),
-        Total=("mentor", "count")
+    # Stats
+    st.markdown("---")
+    feedback_stats(fb_view)
+    st.markdown("---")
+
+    # Summary table with mentor status, skills, sector
+    sum2 = fb_view.groupby("mentor").agg(
+        Good            =("rating", lambda x: (x == "Good").sum()),
+        Average         =("rating", lambda x: (x == "Average").sum()),
+        Poor            =("rating", lambda x: (x == "Poor").sum()),
+        Connected_By_Us =("connected", lambda x: x.str.lower().str.contains("yes", na=False).sum()),
+        Total           =("mentor", "count"),
     ).reset_index()
+    sum2 = sum2.merge(final[["mentor", "status", "skills", "sector"]], on="mentor", how="left")
+    sum2["Good_%"] = (sum2["Good"] / sum2["Total"] * 100).round(1)
+    sum2 = sum2[["mentor", "status", "skills", "sector", "Good", "Average", "Poor", "Good_%", "Connected_By_Us", "Total"]]
+    sum2.columns = ["Mentor", "Status", "Skills", "Sector", "Good", "Average", "Poor", "Good %", "Connected By Us", "Total Sessions"]
 
-    st.dataframe(summary2, use_container_width=True, hide_index=True)
+    st.dataframe(sum2, use_container_width=True, hide_index=True)
 
     # ── Mentor drill-down ─────────────────────────────
     if sel_mentor_fb != "All":
         st.divider()
         st.markdown(f"#### 🔎 Venture Details for **{sel_mentor_fb}**")
+        mfd = fb_view[fb_view["mentor"] == sel_mentor_fb].copy()
+        mfd["vp"] = mfd["venture_program"].replace("", "—")
+        mfd["vh"] = mfd["venture_hub"].replace("", "—")
+        dd2 = mfd[["venture", "vp", "vh", "rating", "comment", "rn_remarks", "connected"]].rename(columns={
+            "venture": "Venture", "vp": "Venture Program", "vh": "Hub",
+            "rating": "Rating", "comment": "Founder Comment",
+            "rn_remarks": "RN Remarks", "connected": "Connected by Us",
+        })
+        st.dataframe(dd2, use_container_width=True, hide_index=True)
 
-        mentor_fb = fb_view[fb_view["mentor"] == sel_mentor_fb].copy()
-        mentor_fb["venture_program_display"] = mentor_fb["venture_program"].replace("", "—")
-
-        detail_cols = ["venture", "venture_program_display", "rating", "comment", "rn_remarks", "connected"]
-        col_labels  = {
-            "venture": "Venture",
-            "venture_program_display": "Venture Program",
-            "rating": "Rating",
-            "comment": "Founder Comment",
-            "rn_remarks": "RN Remarks",
-            "connected": "Connected by Us"
-        }
-
-        avail_cols = [c for c in detail_cols if c in mentor_fb.columns]
-        display_df = mentor_fb[avail_cols].rename(columns=col_labels)
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-        # Mini rating chart
-        if not mentor_fb.empty:
-            rc = mentor_fb["rating"].value_counts().reset_index()
-            rc.columns = ["Rating", "Count"]
-            fig_r = px.pie(rc, names="Rating", values="Count",
-                           title=f"Rating Distribution – {sel_mentor_fb}",
-                           color="Rating",
-                           color_discrete_map={"Good": "#2ecc71", "Average": "#f39c12", "Poor": "#e74c3c"})
-            st.plotly_chart(fig_r, use_container_width=True)
-
+        rc2 = mfd["rating"].dropna().value_counts().reset_index()
+        rc2.columns = ["Rating", "Count"]
+        if not rc2.empty:
+            st.plotly_chart(
+                px.pie(rc2, names="Rating", values="Count",
+                       title=f"Rating Distribution – {sel_mentor_fb}", color="Rating",
+                       color_discrete_map={"Good": "#2ecc71", "Average": "#f39c12", "Poor": "#e74c3c"}),
+                use_container_width=True
+            )
     else:
-        # Show aggregate charts when no specific mentor selected
         st.divider()
         col_a, col_b = st.columns(2)
-
         with col_a:
-            top_fb = summary2.sort_values("Total", ascending=False).head(10)
+            top_fb = sum2.sort_values("Total Sessions", ascending=False).head(10)
             fig_top = px.bar(
-                top_fb.melt(id_vars="mentor", value_vars=["Good", "Average", "Poor"]),
-                x="mentor", y="value", color="variable", barmode="stack",
+                top_fb.melt(id_vars="Mentor", value_vars=["Good", "Average", "Poor"]),
+                x="Mentor", y="value", color="variable", barmode="stack",
                 title="Top 10 Mentors – Feedback Breakdown",
                 color_discrete_map={"Good": "#2ecc71", "Average": "#f39c12", "Poor": "#e74c3c"}
             )
             st.plotly_chart(fig_top, use_container_width=True)
-
         with col_b:
-            overall_ratings = fb_view["rating"].value_counts().reset_index()
-            overall_ratings.columns = ["Rating", "Count"]
-            fig_ov = px.pie(
-                overall_ratings, names="Rating", values="Count",
-                title="Overall Rating Mix",
-                color="Rating",
-                color_discrete_map={"Good": "#2ecc71", "Average": "#f39c12", "Poor": "#e74c3c"}
+            ov = fb_view["rating"].dropna().value_counts().reset_index()
+            ov.columns = ["Rating", "Count"]
+            st.plotly_chart(
+                px.pie(ov, names="Rating", values="Count", title="Overall Rating Mix", color="Rating",
+                       color_discrete_map={"Good": "#2ecc71", "Average": "#f39c12", "Poor": "#e74c3c"}),
+                use_container_width=True
             )
-            st.plotly_chart(fig_ov, use_container_width=True)
 
 
 # ╔══════════════════════════════════════════════════╗
@@ -468,146 +403,117 @@ with tab2:
 with tab3:
     st.subheader("Venture-wise Feedback")
 
-    # ── Filters ──────────────────────────────────────
     with st.expander("🔍 Filters", expanded=True):
         vf1, vf2 = st.columns(2)
+        vp3_vals = sorted({v for v in venture_program_map.values() if v and v not in ("nan", "")})
+        sel_vp3  = vf1.selectbox("Venture Program", ["All"] + vp3_vals, key="vf_vprog")
 
-        with vf1:
-            vp_options = ["All"] + sorted(
-                p for p in fb["venture_program"].dropna().unique() if p and p != "nan"
-            )
-            sel_vp = st.selectbox("Venture Program", vp_options, key="vf_vprog")
+        hub3_vals = sorted({h.strip() for h in venture_hub_map.values() if h and h not in ("nan", "")})
+        sel_hub3  = vf2.selectbox("Hub", ["All"] + hub3_vals, key="vf_hub")
 
-        with vf2:
-            hub_options = ["All"] + sorted(
-                h for h in fb["venture_hub"].dropna().unique() if h and h != "nan"
-            )
-            sel_hub = st.selectbox("Hub", hub_options, key="vf_hub")
-
-    # ── Filter fb ─────────────────────────────────────
     fb_v = fb.copy()
-    if sel_vp != "All":
-        fb_v = fb_v[fb_v["venture_program"] == sel_vp]
-    if sel_hub != "All":
-        fb_v = fb_v[fb_v["venture_hub"] == sel_hub]
+    if sel_vp3 != "All":
+        fb_v = fb_v[fb_v["venture_program"] == sel_vp3]
+    if sel_hub3 != "All":
+        fb_v = fb_v[fb_v["venture_hub"].str.contains(sel_hub3, na=False)]
 
-    # ── Venture summary ───────────────────────────────
-    venture_summary = fb_v.groupby("venture").agg(
+    # Stats
+    st.markdown("---")
+    venture_stats(fb_v)
+    st.markdown("---")
+
+    vent_sum = fb_v.groupby("venture").agg(
         Mentors_Connected=("mentor", "nunique"),
-        Good=("rating", lambda x: (x == "Good").sum()),
-        Average=("rating", lambda x: (x == "Average").sum()),
-        Poor=("rating", lambda x: (x == "Poor").sum()),
-        Total_Sessions=("mentor", "count")
+        Good    =("rating", lambda x: (x == "Good").sum()),
+        Average =("rating", lambda x: (x == "Average").sum()),
+        Poor    =("rating", lambda x: (x == "Poor").sum()),
+        Total   =("mentor", "count"),
     ).reset_index()
+    vent_sum["Good_%"]  = (vent_sum["Good"] / vent_sum["Total"] * 100).round(1)
+    vent_sum["Program"] = vent_sum["venture"].map(venture_program_map).fillna("—").replace("nan", "—")
+    vent_sum["Hub"]     = vent_sum["venture"].map(venture_hub_map).fillna("—").replace("nan", "—")
 
-    venture_summary["Good_%"] = (
-        venture_summary["Good"] / venture_summary["Total_Sessions"] * 100
-    ).round(1)
-
-    def overall_experience(row):
-        if row["Total_Sessions"] == 0:
-            return "—"
-        good_pct = row["Good_%"]
-        poor_count = row["Poor"]
-        if good_pct >= 70:
-            return "😊 Positive"
-        elif poor_count >= 2:
-            return "😟 Needs Attention"
+    def overall_exp(row):
+        if row["Total"] == 0:      return "—"
+        if row["Good_%"] >= 70:    return "😊 Positive"
+        if row["Poor"] >= 2:       return "😟 Needs Attention"
         return "😐 Mixed"
+    vent_sum["Experience"] = vent_sum.apply(overall_exp, axis=1)
 
-    venture_summary["Overall Experience"] = venture_summary.apply(overall_experience, axis=1)
+    disp_vs = vent_sum[["venture", "Program", "Hub", "Mentors_Connected",
+                         "Good", "Average", "Poor", "Good_%", "Experience"]].rename(columns={
+        "venture": "Venture", "Mentors_Connected": "Mentors Connected", "Good_%": "Good %"
+    })
+    st.caption(f"Showing {len(disp_vs)} ventures")
+    st.dataframe(disp_vs, use_container_width=True, hide_index=True)
 
-    # Add program column
-    venture_summary["Program"] = venture_summary["venture"].map(venture_program_map).fillna("—")
-
-    display_vs = venture_summary[[
-        "venture", "Program", "Mentors_Connected",
-        "Good", "Average", "Poor", "Good_%", "Overall Experience"
-    ]].rename(columns={"venture": "Venture"})
-
-    st.caption(f"Showing {len(display_vs)} ventures")
-    st.dataframe(display_vs, use_container_width=True, hide_index=True)
-
-    # ── Top/bottom chart ──────────────────────────────
-    col_x, col_y = st.columns(2)
-    with col_x:
-        top_v = venture_summary.sort_values("Good_%", ascending=False).head(10)
-        fig_vt = px.bar(
-            top_v, x="venture", y="Good_%",
-            title="Top Ventures by % Good Ratings",
-            color_discrete_sequence=["#2ecc71"]
-        )
+    cx, cy = st.columns(2)
+    with cx:
+        top_v = vent_sum.sort_values("Good_%", ascending=False).head(10)
+        fig_vt = px.bar(top_v, x="venture", y="Good_%",
+                        title="Top Ventures by % Good Ratings",
+                        color_discrete_sequence=["#2ecc71"])
         fig_vt.update_layout(xaxis_tickangle=-30)
         st.plotly_chart(fig_vt, use_container_width=True)
-
-    with col_y:
-        exp_counts = venture_summary["Overall Experience"].value_counts().reset_index()
-        exp_counts.columns = ["Experience", "Count"]
-        fig_exp = px.pie(
-            exp_counts, names="Experience", values="Count",
-            title="Venture Experience Distribution",
-            color="Experience",
-            color_discrete_map={
-                "😊 Positive": "#2ecc71",
-                "😐 Mixed": "#f39c12",
-                "😟 Needs Attention": "#e74c3c",
-                "—": "#bdc3c7"
-            }
+    with cy:
+        ec = vent_sum["Experience"].value_counts().reset_index()
+        ec.columns = ["Experience", "Count"]
+        st.plotly_chart(
+            px.pie(ec, names="Experience", values="Count",
+                   title="Venture Experience Distribution", color="Experience",
+                   color_discrete_map={"😊 Positive": "#2ecc71", "😐 Mixed": "#f39c12",
+                                       "😟 Needs Attention": "#e74c3c", "—": "#bdc3c7"}),
+            use_container_width=True
         )
-        st.plotly_chart(fig_exp, use_container_width=True)
 
-    # ── Venture drill-down ────────────────────────────
+    # ── Venture Deep-dive ─────────────────────────────
     st.divider()
     st.markdown("#### 🔎 Venture Deep-dive")
-
-    venture_options = ["— Select a Venture —"] + sorted(fb_v["venture"].dropna().unique().tolist())
-    sel_venture = st.selectbox("Select Venture", venture_options, key="vf_select")
+    v_dd_opts   = ["— Select a Venture —"] + sorted(fb_v["venture"].dropna().unique().tolist())
+    sel_venture = st.selectbox("Select Venture", v_dd_opts, key="vf_select")
 
     if sel_venture != "— Select a Venture —":
         v_rows = fb_v[fb_v["venture"] == sel_venture].copy()
 
-        # Header stats
         vc1, vc2, vc3, vc4 = st.columns(4)
-        vc1.metric("Sessions", len(v_rows))
-        vc2.metric("Mentors", v_rows["mentor"].nunique())
-        vc3.metric("Good", int((v_rows["rating"] == "Good").sum()))
-        vc4.metric("Poor", int((v_rows["rating"] == "Poor").sum()))
+        vc1.metric("Sessions",  len(v_rows))
+        vc2.metric("Mentors",   v_rows["mentor"].nunique())
+        vc3.metric("✅ Good",   int((v_rows["rating"] == "Good").sum()))
+        vc4.metric("🔴 Poor",   int((v_rows["rating"] == "Poor").sum()))
 
-        prog_label = venture_program_map.get(sel_venture, "—")
-        st.caption(f"**Program:** {prog_label}  |  **Hub:** {venture_hub_map.get(sel_venture, '—')}")
+        st.caption(
+            f"**Program:** {venture_program_map.get(sel_venture, '—')}  |  "
+            f"**Hub:** {venture_hub_map.get(sel_venture, '—')}"
+        )
 
         st.markdown("##### Mentor Sessions")
-        v_detail = v_rows[[
-            "mentor", "rating", "comment", "rn_remarks", "connected"
-        ]].rename(columns={
-            "mentor": "Mentor",
-            "rating": "Rating",
-            "comment": "Founder Comment",
-            "rn_remarks": "RN Remarks",
-            "connected": "Connected by Us"
+        vd = v_rows[["mentor", "rating", "comment", "rn_remarks", "connected"]].rename(columns={
+            "mentor": "Mentor", "rating": "Rating", "comment": "Founder Comment",
+            "rn_remarks": "RN Remarks", "connected": "Connected by Us",
         })
-        st.dataframe(v_detail, use_container_width=True, hide_index=True)
+        st.dataframe(vd, use_container_width=True, hide_index=True)
 
-        # Per-mentor rating breakdown
-        mentor_breakdown = v_rows.groupby("mentor").agg(
-            Good=("rating", lambda x: (x == "Good").sum()),
-            Average=("rating", lambda x: (x == "Average").sum()),
-            Poor=("rating", lambda x: (x == "Poor").sum()),
-            Sessions=("mentor", "count")
+        mb = v_rows.groupby("mentor").agg(
+            Good    =("rating", lambda x: (x == "Good").sum()),
+            Average =("rating", lambda x: (x == "Average").sum()),
+            Poor    =("rating", lambda x: (x == "Poor").sum()),
+            Sessions=("mentor", "count"),
         ).reset_index()
-
         fig_mb = px.bar(
-            mentor_breakdown.melt(id_vars="mentor", value_vars=["Good", "Average", "Poor"]),
+            mb.melt(id_vars="mentor", value_vars=["Good", "Average", "Poor"]),
             x="mentor", y="value", color="variable", barmode="stack",
-            title=f"Mentor Rating Breakdown – {sel_venture}",
+            title=f"Mentor Ratings – {sel_venture}",
             labels={"mentor": "Mentor", "value": "Sessions", "variable": "Rating"},
             color_discrete_map={"Good": "#2ecc71", "Average": "#f39c12", "Poor": "#e74c3c"}
         )
         st.plotly_chart(fig_mb, use_container_width=True)
 
-# =====================================================
+# ─────────────────────────────────────────────────────────
 # DOWNLOAD
-# =====================================================
+# ─────────────────────────────────────────────────────────
 st.divider()
-csv = final.to_csv(index=False).encode()
-st.download_button("⬇ Download Mentor Report", csv, "mentor_pool_report.csv", "text/csv")
+st.download_button(
+    "⬇ Download Mentor Report",
+    final.to_csv(index=False).encode(),
+    "mentor_pool_report.csv", "text/csv"
+)
