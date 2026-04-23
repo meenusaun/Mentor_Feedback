@@ -158,7 +158,7 @@ summary = fb.groupby("mentor").agg(
     average =("rating", lambda x: (x == "Average").sum()),
     poor    =("rating", lambda x: (x == "Poor").sum()),
 ).reset_index()
-summary["good_pct"] = (summary["good"] / summary["meetings"] * 100).round(1)
+summary["good_pct"] = (summary["good"] / summary["meetings"].replace(0, pd.NA) * 100).round(1).fillna(0)
 
 final = master.merge(summary, on="mentor", how="left").fillna(0)
 for col in ["meetings", "good", "average", "poor"]:
@@ -271,6 +271,9 @@ with tab1:
     st.markdown("---")
 
     st.caption(f"Showing {len(disp)} of {len(final)} mentors")
+    if disp.empty:
+        st.info("ℹ️ No mentors match the selected filters. Please adjust your filters.")
+        st.stop()
     st.dataframe(
         disp[["mentor", "linkedin", "skills", "sector", "program", "experience", "exp_category",
               "meetings", "good", "average", "poor", "good_pct", "status"]],
@@ -385,6 +388,10 @@ with tab2:
     feedback_stats(fb_view)
     st.markdown("---")
 
+    if fb_view.empty:
+        st.info("ℹ️ No feedback data matches the selected filters. Please adjust your filters.")
+        st.stop()
+
     # Summary table with mentor status, skills, sector
     sum2 = fb_view.groupby("mentor").agg(
         Good            =("rating", lambda x: (x == "Good").sum()),
@@ -394,7 +401,7 @@ with tab2:
         Total           =("mentor", "count"),
     ).reset_index()
     sum2 = sum2.merge(final[["mentor", "status", "skills", "sector"]], on="mentor", how="left")
-    sum2["Good_%"] = (sum2["Good"] / sum2["Total"] * 100).round(1)
+    sum2["Good_%"] = (sum2["Good"] / sum2["Total"].replace(0, pd.NA) * 100).round(1).fillna(0)
     sum2 = sum2[["mentor", "status", "skills", "sector", "Good", "Average", "Poor", "Good_%", "Connected_By_Us", "Total"]]
     sum2.columns = ["Mentor", "Status", "Skills", "Sector", "Good", "Average", "Poor", "Good %", "Connected By Us", "Total Sessions"]
 
@@ -478,7 +485,7 @@ with tab3:
             Poor  =("rating", lambda x: (x == "Poor").sum()),
             Total =("mentor", "count"),
         ).reset_index()
-        tmp["Good_%"] = (tmp["Good"] / tmp["Total"] * 100).round(1)
+        tmp["Good_%"] = (tmp["Good"] / tmp["Total"].replace(0, pd.NA) * 100).round(1).fillna(0)
         def _exp(row):
             if row["Good_%"] >= 70: return "😊 Positive"
             if row["Poor"] >= 2:    return "😟 Needs Attention"
@@ -492,6 +499,10 @@ with tab3:
     venture_stats(fb_v)
     st.markdown("---")
 
+    if fb_v.empty:
+        st.info("ℹ️ No data matches the selected filters. Please adjust your filters.")
+        st.stop()
+
     vent_sum = fb_v.groupby("venture").agg(
         Mentors_Connected=("mentor", "nunique"),
         Good    =("rating", lambda x: (x == "Good").sum()),
@@ -499,7 +510,7 @@ with tab3:
         Poor    =("rating", lambda x: (x == "Poor").sum()),
         Total   =("mentor", "count"),
     ).reset_index()
-    vent_sum["Good_%"]  = (vent_sum["Good"] / vent_sum["Total"] * 100).round(1)
+    vent_sum["Good_%"]  = (vent_sum["Good"] / vent_sum["Total"].replace(0, pd.NA) * 100).round(1).fillna(0)
     vent_sum["Program"] = vent_sum["venture"].map(venture_program_map).fillna("—").replace("nan", "—")
     vent_sum["Hub"]     = vent_sum["venture"].map(venture_hub_map).fillna("—").replace("nan", "—")
 
