@@ -168,12 +168,33 @@ final["status"] = final.apply(get_status, axis=1)
 # ─────────────────────────────────────────────────────────
 # STAT ROW HELPERS  (all filter-aware)
 # ─────────────────────────────────────────────────────────
-def mentor_stats(df_f):
+def mentor_stats(df_f, fb_f=None):
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Mentors",  len(df_f))
     c2.metric("Active Mentors", int((df_f["meetings"] > 0).sum()))
     c3.metric("Dormant",        int((df_f["meetings"] == 0).sum()))
     c4.metric("Total Meetings", int(df_f["meetings"].sum()))
+    # Row 2: Mentor Status counts
+    status_order = ["⭐ High Performer", "💎 Hidden Gem", "🟡 Active", "🚨 Needs Review", "😴 Dormant"]
+    s_counts = df_f["status"].value_counts()
+    st.caption("**Mentor Status Breakdown**")
+    scols = st.columns(len(status_order))
+    for i, s in enumerate(status_order):
+        scols[i].metric(s, int(s_counts.get(s, 0)))
+    # Row 3: Overall Experience counts (mentors with feedback only)
+    if fb_f is not None and not fb_f.empty:
+        exp_labels = {"😊 Positive": 0, "😐 Mixed": 0, "😟 Needs Attention": 0}
+        for mname, grp in fb_f.groupby("mentor"):
+            gp = (grp["rating"] == "Good").sum() / len(grp) * 100
+            pc = (grp["rating"] == "Poor").sum()
+            if gp >= 70:   exp_labels["😊 Positive"]       += 1
+            elif pc >= 2:  exp_labels["😟 Needs Attention"] += 1
+            else:          exp_labels["😐 Mixed"]           += 1
+        st.caption("**Overall Experience Breakdown** (mentors with sessions)")
+        ec1, ec2, ec3 = st.columns(3)
+        ec1.metric("😊 Positive",        exp_labels["😊 Positive"])
+        ec2.metric("😐 Mixed",           exp_labels["😐 Mixed"])
+        ec3.metric("😟 Needs Attention", exp_labels["😟 Needs Attention"])
 
 def feedback_stats(fb_f):
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -246,13 +267,14 @@ with tab1:
 
     # Stats
     st.markdown("---")
-    mentor_stats(disp)
+    mentor_stats(disp, fb[fb["mentor"].isin(disp["mentor"])])
     st.markdown("---")
 
     st.caption(f"Showing {len(disp)} of {len(final)} mentors")
     st.dataframe(
-        disp[["mentor", "skills", "sector", "program", "experience", "exp_category",
+        disp[["mentor", "linkedin", "skills", "sector", "program", "experience", "exp_category",
               "meetings", "good", "average", "poor", "good_pct", "status"]],
+        column_config={"linkedin": st.column_config.LinkColumn("LinkedIn", display_text="🔗 Profile")},
         use_container_width=True, hide_index=True
     )
 
@@ -293,10 +315,12 @@ with tab1:
         pc4.metric("🔴 Poor",    int(mrow["poor"]))
         pc5.metric("Good %",     f"{mrow['good_pct']}%")
 
+        li_url = mrow["linkedin"]
+        li_link = f"[🔗 LinkedIn Profile]({li_url})" if li_url and li_url not in ("", "nan") else "—"
         st.caption(
             f"**Status:** {mrow['status']}  |  **Skills:** {mrow['skills']}  |  "
             f"**Sector:** {mrow['sector']}  |  **Experience:** {mrow['experience']} yrs  |  "
-            f"**Program:** {mrow['program']}"
+            f"**Program:** {mrow['program']}  |  **LinkedIn:** {li_link}"
         )
 
         if mfb.empty:
@@ -533,11 +557,19 @@ with tab3:
         )
 
         st.markdown("##### Mentor Sessions")
-        vd = v_rows[["mentor", "rating", "comment", "rn_remarks", "connected"]].rename(columns={
-            "mentor": "Mentor", "rating": "Rating", "comment": "Founder Comment",
+        vd = v_rows.merge(
+            final[["mentor", "linkedin", "skills"]],
+            on="mentor", how="left"
+        )[["mentor", "linkedin", "skills", "rating", "comment", "rn_remarks", "connected"]].rename(columns={
+            "mentor": "Mentor", "linkedin": "LinkedIn", "skills": "Key Skills",
+            "rating": "Rating", "comment": "Founder Comment",
             "rn_remarks": "RN Remarks", "connected": "Connected by Us",
         })
-        st.dataframe(vd, use_container_width=True, hide_index=True)
+        st.dataframe(
+            vd,
+            column_config={"LinkedIn": st.column_config.LinkColumn("LinkedIn", display_text="🔗 Profile")},
+            use_container_width=True, hide_index=True
+        )
 
         mb = v_rows.groupby("mentor").agg(
             Good    =("rating", lambda x: (x == "Good").sum()),
